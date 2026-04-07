@@ -1,0 +1,104 @@
+require('dotenv').config();
+const {
+  Client,
+  GatewayIntentBits,
+  EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle
+} = require('discord.js');
+
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent
+  ]
+});
+
+let currentScrim = null;
+
+client.once('ready', () => {
+  console.log(`✅ Logged in as ${client.user.tag}`);
+});
+
+// MESSAGE COMMAND
+client.on('messageCreate', async (message) => {
+  if (message.content === '!createscrim') {
+
+    currentScrim = {
+      teams: [],
+      maxSlots: 25,
+      host: message.author.username
+    };
+
+    const embed = new EmbedBuilder()
+      .setTitle('🔥 SAFFRON SCRIM')
+      .setDescription('Click the button below to join!')
+      .addFields(
+        { name: '👑 Host', value: currentScrim.host },
+        { name: '🎮 Slots', value: '0/25' },
+        { name: '📋 Teams', value: 'No teams yet' }
+      )
+      .setColor('Orange');
+
+    const button = new ButtonBuilder()
+      .setCustomId('join_scrim')
+      .setLabel('Join Scrim')
+      .setStyle(ButtonStyle.Success);
+
+    const row = new ActionRowBuilder().addComponents(button);
+
+    const msg = await message.channel.send({
+      embeds: [embed],
+      components: [row]
+    });
+
+    currentScrim.message = msg;
+  }
+});
+
+// BUTTON INTERACTION
+client.on('interactionCreate', async (interaction) => {
+  if (!interaction.isButton()) return;
+
+  if (interaction.customId === 'join_scrim') {
+
+    if (!currentScrim) {
+      return interaction.reply({ content: '❌ No active scrim!', ephemeral: true });
+    }
+
+    if (currentScrim.teams.includes(interaction.user.username)) {
+      return interaction.reply({ content: '❌ You already joined!', ephemeral: true });
+    }
+
+    if (currentScrim.teams.length >= currentScrim.maxSlots) {
+      return interaction.reply({ content: '❌ Slots full!', ephemeral: true });
+    }
+
+    // Add team (using username for now)
+    currentScrim.teams.push(interaction.user.username);
+
+    const embed = new EmbedBuilder()
+      .setTitle('🔥 SAFFRON SCRIM')
+      .setDescription('Click the button below to join!')
+      .addFields(
+        { name: '👑 Host', value: currentScrim.host },
+        { name: '🎮 Slots', value: `${currentScrim.teams.length}/25` },
+        {
+          name: '📋 Teams',
+          value: currentScrim.teams.map((t, i) => `${i + 1}. ${t}`).join('\n')
+        }
+      )
+      .setColor('Orange');
+
+    currentScrim.message.edit({ embeds: [embed] });
+
+    await interaction.reply({
+      content: `✅ You joined the scrim!`,
+      ephemeral: true
+    });
+  }
+});
+
+client.login(process.env.TOKEN);

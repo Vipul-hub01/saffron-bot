@@ -1,0 +1,203 @@
+require('dotenv').config();
+const {
+  Client,
+  GatewayIntentBits,
+  EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle
+} = require('discord.js');
+
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent
+  ]
+});
+
+// ✅ YOUR ROLE ID ADDED HERE
+const SCRIM_ROLE_ID = "1488611595318988850";
+
+let currentScrim = null;
+
+client.once('ready', () => {
+  console.log(`✅ Logged in as ${client.user.tag}`);
+});
+
+// 🎮 CREATE SCRIM
+client.on('messageCreate', async (message) => {
+  if (message.content === '!createscrim') {
+
+    currentScrim = {
+      teams: [],
+      maxSlots: 25,
+      hostId: message.author.id,
+      hostName: message.author.username,
+      locked: false,
+      roomId: null,
+      password: null
+    };
+
+    const embed = new EmbedBuilder()
+      .setTitle('🔥 SAFFRON SCRIM BOT')
+      .setDescription('Click buttons below to join or leave the scrim')
+      .addFields(
+        { name: '👑 Host', value: currentScrim.hostName },
+        { name: '🎮 Slots', value: '0/25' },
+        { name: '📋 Teams', value: 'No teams yet' }
+      )
+      .setColor('Orange');
+
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('join').setLabel('Join').setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId('leave').setLabel('Leave').setStyle(ButtonStyle.Danger),
+      new ButtonBuilder().setCustomId('lock').setLabel('Lock').setStyle(ButtonStyle.Primary)
+    );
+
+    const msg = await message.channel.send({
+      embeds: [embed],
+      components: [row]
+    });
+
+    currentScrim.message = msg;
+  }
+});
+
+// ⚡ BUTTON + MODAL HANDLER
+client.on('interactionCreate', async (interaction) => {
+
+  // 🟢 JOIN BUTTON → OPEN MODAL
+  if (interaction.isButton() && interaction.customId === 'join') {
+    if (!currentScrim) {
+      return interaction.reply({ content: '❌ No active scrim!', ephemeral: true });
+    }
+
+    if (currentScrim.locked) {
+      return interaction.reply({ content: '❌ Scrim is locked!', ephemeral: true });
+    }
+
+    const modal = new ModalBuilder()
+      .setCustomId('team_modal')
+      .setTitle('Enter Team Name');
+
+    const input = new TextInputBuilder()
+      .setCustomId('team_name')
+      .setLabel('Your Team Name')
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true);
+
+    const row = new ActionRowBuilder().addComponents(input);
+    modal.addComponents(row);
+
+    return interaction.showModal(modal);
+  }
+
+  // 🔴 LEAVE BUTTON
+  if (interaction.isButton() && interaction.customId === 'leave') {
+    if (!currentScrim) return;
+
+    currentScrim.teams = currentScrim.teams.filter(
+      t => t.userId !== interaction.user.id
+    );
+
+    updateEmbed();
+
+    const member = interaction.guild.members.cache.get(interaction.user.id);
+    if (member.roles.cache.has(SCRIM_ROLE_ID)) {
+      member.roles.remove(SCRIM_ROLE_ID);
+    }
+
+    return interaction.reply({
+      content: '❌ You left the scrim',
+      ephemeral: true
+    });
+  }
+
+  // 🔒 LOCK BUTTON (HOST ONLY)
+  if (interaction.isButton() && interaction.customId === 'lock') {
+    if (interaction.user.id !== currentScrim.hostId) {
+      return interaction.reply({
+        content: '❌ Only host can lock the scrim!',
+        ephemeral: true
+      });
+    }
+
+    currentScrim.locked = true;
+
+    // Generate Room Details
+    currentScrim.roomId = Math.floor(100000 + Math.random() * 900000).toString();
+    currentScrim.password = Math.random().toString(36).substring(2, 8);
+
+    updateEmbed(true);
+
+    return interaction.reply({
+      content: '🔒 Scrim Locked! Room details revealed.',
+      ephemeral: true
+    });
+  }
+
+  // 🧾 MODAL SUBMIT (TEAM NAME)
+  if (interaction.isModalSubmit() && interaction.customId === 'team_modal') {
+
+    const teamName = interaction.fields.getTextInputValue('team_name');
+
+    if (currentScrim.teams.length >= currentScrim.maxSlots) {
+      return interaction.reply({ content: '❌ Slots full!', ephemeral: true });
+    }
+
+    if (currentScrim.teams.find(t => t.userId === interaction.user.id)) {
+      return interaction.reply({ content: '❌ You already joined!', ephemeral: true });
+    }
+
+    currentScrim.teams.push({
+      name: teamName,
+      userId: interaction.user.id
+    });
+
+    // ✅ GIVE ROLE
+    const member = interaction.guild.members.cache.get(interaction.user.id);
+    if (!member.roles.cache.has(SCRIM_ROLE_ID)) {
+      member.roles.add(SCRIM_ROLE_ID);
+    }
+
+    updateEmbed();
+
+    return interaction.reply({
+      content: `✅ **${teamName}** joined the scrim!`,
+      ephemeral: true
+    });
+  }
+});
+
+// 🔄 UPDATE EMBED FUNCTION
+function updateEmbed(showRoom = false) {
+
+  const embed = new EmbedBuilder()
+    .setTitle('🔥 SAFFRON SCRIM BOT')
+    .setColor('Orange')
+    .addFields(
+      { name: '👑 Host', value: currentScrim.hostName },
+      { name: '🎮 Slots', value: `${currentScrim.teams.length}/25` },
+      {
+        name: '📋 Teams',
+        value: currentScrim.teams.length
+          ? currentScrim.teams.map((t, i) => `${i + 1}. ${t.name}`).join('\n')
+          : 'No teams yet'
+      }
+    );
+
+  if (showRoom) {
+    embed.addFields(
+      { name: '🏠 Room ID', value: currentScrim.roomId },
+      { name: '🔑 Password', value: currentScrim.password }
+    );
+  }
+
+  currentScrim.message.edit({ embeds: [embed] });
+}
+
+client.login(process.env.TOKEN);

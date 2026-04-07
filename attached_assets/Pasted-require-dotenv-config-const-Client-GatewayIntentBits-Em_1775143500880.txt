@@ -1,0 +1,79 @@
+require('dotenv').config();
+const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
+
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent
+  ]
+});
+
+// Scrim data (temporary memory)
+let currentScrim = null;
+
+client.once('ready', () => {
+  console.log(`✅ Logged in as ${client.user.tag}`);
+});
+
+client.on('messageCreate', async (message) => {
+  if (!message.content.startsWith('!') || message.author.bot) return;
+
+  const args = message.content.slice(1).split(/ +/);
+  const cmd = args.shift().toLowerCase();
+
+  // 🎮 CREATE SCRIM
+  if (cmd === 'createscrim') {
+    currentScrim = {
+      teams: [],
+      maxSlots: 25,
+      host: message.author.username
+    };
+
+    const embed = new EmbedBuilder()
+      .setTitle('🔥 SAFFRON SCRIM')
+      .setDescription('Slots are open! Type **!join TeamName** to join.')
+      .addFields(
+        { name: '👑 Host', value: currentScrim.host },
+        { name: '🎮 Slots', value: '0/25' },
+        { name: '📋 Teams', value: 'No teams yet' }
+      )
+      .setColor('Orange');
+
+    currentScrim.message = await message.channel.send({ embeds: [embed] });
+  }
+
+  // 🟢 JOIN SCRIM
+  if (cmd === 'join') {
+    if (!currentScrim) return message.reply('❌ No active scrim!');
+
+    const teamName = args.join(' ');
+    if (!teamName) return message.reply('❌ Provide team name!');
+
+    if (currentScrim.teams.length >= currentScrim.maxSlots) {
+      return message.reply('❌ Slots full!');
+    }
+
+    currentScrim.teams.push(teamName);
+
+    // Update embed
+    const embed = new EmbedBuilder()
+      .setTitle('🔥 SAFFRON SCRIM')
+      .setDescription('Slots are open! Type **!join TeamName** to join.')
+      .addFields(
+        { name: '👑 Host', value: currentScrim.host },
+        { name: '🎮 Slots', value: `${currentScrim.teams.length}/25` },
+        {
+          name: '📋 Teams',
+          value: currentScrim.teams.map((t, i) => `${i + 1}. ${t}`).join('\n')
+        }
+      )
+      .setColor('Orange');
+
+    currentScrim.message.edit({ embeds: [embed] });
+
+    message.reply(`✅ **${teamName}** joined the scrim!`);
+  }
+});
+
+client.login(process.env.TOKEN);
