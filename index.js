@@ -250,6 +250,61 @@ client.on('error', err => console.warn('⚠️ Discord client error:', err.messa
 client.on('interactionCreate', async (interaction) => {
   try {
 
+     // ✅ SLASH COMMAND HANDLER (ADD THIS BLOCK)
+    if (interaction.isChatInputCommand()) {
+
+      const { commandName } = interaction;
+
+      await interaction.deferReply(); // important
+
+      // 🎮 CREATE SCRIM
+      if (commandName === 'createscrim') {
+        return interaction.editReply('✅ Scrim created! (connect your existing logic here)');
+      }
+
+      // 📊 RESULTS
+      if (commandName === 'results') {
+        return interaction.editReply('📊 Showing results...');
+      }
+
+      // 📜 HISTORY
+      if (commandName === 'history') {
+        return interaction.editReply('📜 Fetching history...');
+      }
+
+      // 📋 MATCH
+      if (commandName === 'match') {
+        const id = interaction.options.getInteger('id');
+        return interaction.editReply(`📋 Match #${id}`);
+      }
+
+      // 🗑️ DELETE MATCH
+      if (commandName === 'deletematch') {
+        const id = interaction.options.getInteger('id');
+        return interaction.editReply(`🗑️ Deleted match #${id}`);
+      }
+
+      // 📢 ANNOUNCE
+      if (commandName === 'announce') {
+        return interaction.editReply({
+          content: 'Click button below',
+          components: [
+            new ActionRowBuilder().addComponents(
+              new ButtonBuilder()
+                .setCustomId('open_announce')
+                .setLabel('Create Announcement')
+                .setStyle(ButtonStyle.Primary)
+            )
+          ]
+        });
+      }
+
+      // 📖 HELP
+      if (commandName === 'help') {
+        return interaction.editReply('📖 Showing help...');
+      }
+    }
+
   // 📢 ANNOUNCE BUTTON → OPEN MODAL
   if (interaction.isButton() && interaction.customId === 'open_announce') {
     if (!interaction.member.permissions.has('Administrator')) {
