@@ -2,14 +2,14 @@ name: Deploy Slash Commands
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
+      - name: Checkout repo
         uses: actions/checkout@v3
 
       - name: Setup Node
@@ -20,8 +20,9 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Run deploy script
+      - name: Deploy Commands
         run: node deploy-commands.js
         env:
           DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
           CLIENT_ID: ${{ secrets.CLIENT_ID }}
+          GUILD_ID: ${{ secrets.GUILD_ID }}
