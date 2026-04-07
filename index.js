@@ -53,7 +53,7 @@ const LOG_CHANNEL_ID = "1489298280960622805";
 
 let currentScrim = null;
 
-client.once('ready', async () => {
+client.once('clientReady', async () => {
   await connectDB();
   await loadMatchCounter();
   console.log(`✅ Logged in as ${client.user.tag}`);
