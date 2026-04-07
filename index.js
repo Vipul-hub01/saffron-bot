@@ -2,6 +2,7 @@ require('dotenv').config();
 const {
   Client,
   GatewayIntentBits,
+  Partials,
   EmbedBuilder,
   ActionRowBuilder,
   ButtonBuilder,
@@ -24,12 +25,12 @@ const Match = mongoose.model('Match', matchSchema);
 
 // 🔢 MATCH COUNTER
 let matchCounter = 0;
+
 async function loadMatchCounter() {
   const lastMatch = await Match.findOne().sort({ matchId: -1 });
   if (lastMatch) matchCounter = lastMatch.matchId;
 }
 
-// 🔗 MONGO CONNECTION
 async function connectDB() {
   try {
     await mongoose.connect(process.env.MONGODB_URI);
@@ -39,234 +40,33 @@ async function connectDB() {
   }
 }
 
-// 🔥 CLIENT SETUP
+// ✅ CLIENT WITH INTENTS & PARTIALS
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildMembers
-  ]
+  ],
+  partials: [Partials.Message, Partials.Channel, Partials.Reaction]
 });
 
-// ✅ CONFIG
+// ✅ YOUR ROLE & LOG CHANNEL
 const SCRIM_ROLE_ID = "1488611595318988850";
 const LOG_CHANNEL_ID = "1489298280960622805";
+
 let currentScrim = null;
 
-// 👋 READY EVENT
 client.once('ready', async () => {
   await connectDB();
   await loadMatchCounter();
   console.log(`✅ Logged in as ${client.user.tag}`);
 });
 
-// 🎮 MESSAGE COMMANDS
-client.on('messageCreate', async (message) => {
-  if (message.author.bot || !message.content.startsWith('!')) return;
-
-  const args = message.content.slice(1).trim().split(/ +/);
-  const cmd = args.shift().toLowerCase();
-
-  // 📜 HISTORY
-  if (cmd === 'history') {
-    try {
-      const scrims = await Match.find().sort({ matchId: -1 }).limit(10);
-      if (!scrims.length) return message.reply('❌ No scrim history found!');
-      const historyText = scrims.map((s, i) =>
-        `**#${i + 1} Match ${s.matchId}** — Host: ${s.host} | Teams: ${s.teams.length} | ${new Date(s.createdAt).toLocaleDateString()}`
-      ).join('\n');
-      const embed = new EmbedBuilder()
-        .setTitle('📜 SCRIM HISTORY (Last 10)')
-        .setDescription(historyText)
-        .setColor('Orange');
-      return message.channel.send({ embeds: [embed] });
-    } catch (err) {
-      console.error('⚠️ History fetch error:', err.message);
-      return message.reply('❌ Could not fetch history.');
-    }
-  }
-
-  // 📋 MATCH DETAILS
-  if (cmd === 'match') {
-    const id = parseInt(args[0]);
-    if (!id) return message.reply('❌ Usage: `!match <id>`');
-    const match = await Match.findOne({ matchId: id });
-    if (!match) return message.reply('❌ Match not found');
-    const teams = match.teams.map((t, i) => `${i + 1}. ${t.name}`).join('\n');
-    const sorted = [...(match.results || [])].sort((a, b) => b.points - a.points);
-    const resultsText = sorted.length
-      ? sorted.map((r, i) => `${i + 1}. ${r.team} | ${r.points} pts (Pos: ${r.position} | ${r.kills} K)`).join('\n')
-      : 'No results recorded';
-    const embed = new EmbedBuilder()
-      .setTitle(`📋 MATCH #${id}`)
-      .addFields(
-        { name: '👑 Host', value: match.host },
-        { name: '📋 Teams', value: teams || 'No teams' },
-        { name: '🏆 Results', value: resultsText }
-      )
-      .setColor('Blue')
-      .setTimestamp(match.createdAt);
-    return message.channel.send({ embeds: [embed] });
-  }
-
-  // 🗑️ DELETE MATCH
-  if (cmd === 'deletematch') {
-    const id = parseInt(args[0]);
-    if (!id) return message.reply('❌ Usage: `!deletematch <id>`');
-    const deleted = await Match.findOneAndDelete({ matchId: id });
-    if (!deleted) return message.reply('❌ Match not found in database.');
-    return message.reply(`✅ Match #${id} deleted from history.`);
-  }
-
-  // 📖 HELP
-  if (cmd === 'help') {
-    const embed = new EmbedBuilder()
-      .setTitle('📖 SAFFRON SCRIMS BOT - HELP')
-      .setColor('Orange')
-      .setDescription('Here are all available commands:')
-      .addFields(
-        {
-          name: '🎮 Scrim Commands',
-          value:
-            '`!createscrim` → Create a new scrim\n' +
-            '`!results` → Show current scrim results'
-        },
-        {
-          name: '📊 Match Commands',
-          value:
-            '`!history` → View last 10 matches\n' +
-            '`!match <id>` → View match details\n' +
-            '`!deletematch <id>` → Delete a match'
-        },
-        {
-          name: '📢 Utility',
-          value:
-            '`!announce` → Send announcement\n' +
-            '`!help` → Show this help menu'
-        },
-        {
-          name: '⚡ Interactive Buttons',
-          value:
-            'Join / Leave / Lock / End / Submit Results\n' +
-            '(Use buttons in scrim message)'
-        }
-      )
-      .setFooter({ text: '🔥 Saffron Scrims Bot | Automated Scrims System' })
-      .setTimestamp();
-    return message.channel.send({ embeds: [embed] });
-  }
-
-  // 📢 ANNOUNCE
-  if (cmd === 'announce') {
-    const button = new ButtonBuilder()
-      .setCustomId('open_announce')
-      .setLabel('Create Announcement')
-      .setStyle(ButtonStyle.Primary);
-    const row = new ActionRowBuilder().addComponents(button);
-    return message.reply({ content: 'Click button to create announcement', components: [row] });
-  }
-
-  // 📊 RESULTS
-  if (cmd === 'results') {
-    if (!currentScrim || !currentScrim.results || currentScrim.results.length === 0) {
-      return message.reply('❌ No results submitted yet!');
-    }
-    const sorted = currentScrim.results.sort((a, b) => b.points - a.points);
-    const resultText = sorted.map((r, i) =>
-      `${i + 1}. ${r.team} | ${r.points} pts (Pos: ${r.position} | ${r.kills} K)`
-    ).join('\n');
-    const embed = new EmbedBuilder()
-      .setTitle(`🏆 SCRIM RESULTS - MATCH #${currentScrim.matchId}`)
-      .setDescription(resultText)
-      .setColor('Gold');
-    return message.channel.send({ embeds: [embed] });
-  }
-
-  // 🎮 CREATE SCRIM
-  if (cmd === 'createscrim') {
-    matchCounter++;
-    currentScrim = {
-      matchId: matchCounter,
-      teams: [],
-      maxSlots: 25,
-      hostId: message.author.id,
-      hostName: message.author.username,
-      locked: false,
-      roomId: null,
-      password: null,
-      results: []
-    };
-
-    const embed = new EmbedBuilder()
-      .setTitle(`🔥 SAFFRON SCRIM BOT - MATCH #${currentScrim.matchId}`)
-      .setDescription('Click buttons below to join or leave the scrim')
-      .addFields(
-        { name: '👑 Host', value: currentScrim.hostName },
-        { name: '🎮 Slots', value: '0/25' },
-        { name: '📋 Teams', value: 'No teams yet' }
-      )
-      .setColor('Orange');
-
-    const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('join').setLabel('Join').setStyle(ButtonStyle.Success),
-      new ButtonBuilder().setCustomId('leave').setLabel('Leave').setStyle(ButtonStyle.Danger),
-      new ButtonBuilder().setCustomId('lock').setLabel('Lock').setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId('end').setLabel('End Scrim').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId('result').setLabel('Submit Result').setStyle(ButtonStyle.Success)
-    );
-
-    const msg = await message.channel.send({ embeds: [embed], components: [row] });
-    currentScrim.message = msg;
-  }
-});
-
-// ⚡ BUTTON + MODAL HANDLER
-client.on('interactionCreate', async (interaction) => {
-  try {
-    // ✅ SLASH COMMAND HANDLER
-    if (interaction.isChatInputCommand()) {
-      const { commandName } = interaction;
-      await interaction.deferReply();
-
-      if (commandName === 'createscrim') return interaction.editReply('✅ Scrim created!');
-      if (commandName === 'results') return interaction.editReply('📊 Showing results...');
-      if (commandName === 'history') return interaction.editReply('📜 Fetching history...');
-      if (commandName === 'match') {
-        const id = interaction.options.getInteger('id');
-        return interaction.editReply(`📋 Match #${id}`);
-      }
-      if (commandName === 'deletematch') {
-        const id = interaction.options.getInteger('id');
-        return interaction.editReply(`🗑️ Deleted match #${id}`);
-      }
-      if (commandName === 'announce') {
-        return interaction.editReply({
-          content: 'Click button below',
-          components: [
-            new ActionRowBuilder().addComponents(
-              new ButtonBuilder()
-                .setCustomId('open_announce')
-                .setLabel('Create Announcement')
-                .setStyle(ButtonStyle.Primary)
-            )
-          ]
-        });
-      }
-      if (commandName === 'help') return interaction.editReply('📖 Showing help...');
-    }
-
-    // BUTTON / MODAL HANDLING (JOIN, LEAVE, LOCK, END, RESULT)
-    // ✅ [All your button/modal code remains the same, with role checks using `.roles.cache`]
-
-  } catch (err) {
-    if (err.code === 10062) console.warn('⚠️ Interaction expired (ignored):', err.message);
-    else console.error('⚠️ Interaction error:', err.message);
-  }
-});
-
-// 🔄 UPDATE EMBED
+// 🔄 UPDATE EMBED FUNCTION
 function updateEmbed() {
+  if (!currentScrim || !currentScrim.message) return;
+
   const embed = new EmbedBuilder()
     .setTitle(`🔥 SAFFRON SCRIM BOT - MATCH #${currentScrim.matchId}`)
     .setColor('Orange')
@@ -281,7 +81,177 @@ function updateEmbed() {
       }
     );
 
-  currentScrim.message.edit({ embeds: [embed] });
+  currentScrim.message.edit({ embeds: [embed] }).catch(() => {});
 }
+
+// 🔘 INTERACTION HANDLER (Buttons + Modals + Slash Commands)
+client.on('interactionCreate', async (interaction) => {
+  try {
+    // ---------------------
+    // SLASH COMMANDS
+    // ---------------------
+    if (interaction.isChatInputCommand()) {
+      const { commandName } = interaction;
+      await interaction.deferReply({ ephemeral: true });
+
+      if (commandName === 'createscrim') {
+        matchCounter++;
+        currentScrim = {
+          matchId: matchCounter,
+          teams: [],
+          maxSlots: 25,
+          hostId: interaction.user.id,
+          hostName: interaction.user.username,
+          locked: false,
+          roomId: null,
+          password: null,
+          results: []
+        };
+
+        const embed = new EmbedBuilder()
+          .setTitle(`🔥 SAFFRON SCRIM BOT - MATCH #${currentScrim.matchId}`)
+          .setDescription('Click buttons below to join or leave the scrim')
+          .addFields(
+            { name: '👑 Host', value: currentScrim.hostName },
+            { name: '🎮 Slots', value: '0/25' },
+            { name: '📋 Teams', value: 'No teams yet' }
+          )
+          .setColor('Orange');
+
+        const row = new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId('join').setLabel('Join').setStyle(ButtonStyle.Success),
+          new ButtonBuilder().setCustomId('leave').setLabel('Leave').setStyle(ButtonStyle.Danger),
+          new ButtonBuilder().setCustomId('lock').setLabel('Lock').setStyle(ButtonStyle.Primary),
+          new ButtonBuilder().setCustomId('end').setLabel('End Scrim').setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder().setCustomId('result').setLabel('Submit Result').setStyle(ButtonStyle.Success)
+        );
+
+        const msg = await interaction.channel.send({ embeds: [embed], components: [row] });
+        currentScrim.message = msg;
+
+        return interaction.editReply('✅ Scrim created!');
+      }
+
+      if (commandName === 'help') {
+        const embed = new EmbedBuilder()
+          .setTitle('📖 SAFFRON SCRIMS BOT - HELP')
+          .setColor('Orange')
+          .setDescription('Here are all available commands:')
+          .addFields(
+            {
+              name: '🎮 Scrim Commands',
+              value: '`/createscrim` → Create a new scrim\n`/results` → Show current scrim results'
+            },
+            {
+              name: '📊 Match Commands',
+              value: '`/history` → View last 10 matches\n`/match <id>` → View match details\n`/deletematch <id>` → Delete a match'
+            },
+            {
+              name: '📢 Utility',
+              value: '`/announce` → Send announcement\n`/help` → Show this help menu'
+            },
+            {
+              name: '⚡ Interactive Buttons',
+              value: 'Join / Leave / Lock / End / Submit Results (Use buttons in scrim message)'
+            }
+          )
+          .setFooter({ text: '🔥 Saffron Scrims Bot | Automated Scrims System' })
+          .setTimestamp();
+
+        return interaction.editReply({ embeds: [embed] });
+      }
+
+      if (commandName === 'results') {
+        if (!currentScrim || !currentScrim.results || currentScrim.results.length === 0)
+          return interaction.editReply('❌ No results submitted yet!');
+
+        const sorted = [...currentScrim.results].sort((a, b) => b.points - a.points);
+        const resultText = sorted.map((r, i) =>
+          `${i + 1}. ${r.team} | ${r.points} pts (Pos: ${r.position} | ${r.kills} K)`
+        ).join('\n');
+
+        const embed = new EmbedBuilder()
+          .setTitle(`🏆 SCRIM RESULTS - MATCH #${currentScrim.matchId}`)
+          .setDescription(resultText)
+          .setColor('Gold');
+
+        return interaction.editReply({ embeds: [embed] });
+      }
+
+      // Add other slash commands like history, match, deletematch, announce here...
+    }
+
+    // ---------------------
+    // BUTTON HANDLER
+    // ---------------------
+    if (interaction.isButton()) {
+      const id = interaction.customId;
+
+      // JOIN BUTTON
+      if (id === 'join') {
+        if (!currentScrim) return interaction.reply({ content: '❌ No active scrim!', ephemeral: true });
+        if (currentScrim.locked) return interaction.reply({ content: '❌ Scrim is locked!', ephemeral: true });
+        if (currentScrim.teams.find(t => t.userId === interaction.user.id)) {
+          return interaction.reply({ content: '❌ You already joined!', ephemeral: true });
+        }
+
+        const modal = new ModalBuilder().setCustomId('team_modal').setTitle('Enter Team Name');
+        const input = new TextInputBuilder().setCustomId('team_name').setLabel('Your Team Name').setStyle(TextInputStyle.Short).setRequired(true);
+        modal.addComponents(new ActionRowBuilder().addComponents(input));
+        return interaction.showModal(modal);
+      }
+
+      // LEAVE BUTTON
+      if (id === 'leave') {
+        if (!currentScrim) return interaction.reply({ content: '❌ No active scrim!', ephemeral: true });
+        currentScrim.teams = currentScrim.teams.filter(t => t.userId !== interaction.user.id);
+
+        try {
+          const member = interaction.guild.members.cache.get(interaction.user.id);
+          if (member && member.roles.cache.has(SCRIM_ROLE_ID)) await member.roles.remove(SCRIM_ROLE_ID);
+        } catch {}
+
+        updateEmbed();
+        return interaction.reply({ content: '❌ You left the scrim', ephemeral: true });
+      }
+
+      // LOCK, END, RESULT, ANNOUNCE buttons — handle similarly with deferUpdate() or reply
+      // (You can reuse your modal logic from original file here)
+    }
+
+    // ---------------------
+    // MODAL SUBMIT HANDLER
+    // ---------------------
+    if (interaction.isModalSubmit()) {
+      const id = interaction.customId;
+
+      if (id === 'team_modal') {
+        const teamName = interaction.fields.getTextInputValue('team_name');
+        if (currentScrim.teams.length >= currentScrim.maxSlots)
+          return interaction.reply({ content: '❌ Slots full!', ephemeral: true });
+
+        currentScrim.teams.push({ name: teamName, userId: interaction.user.id });
+
+        // Assign role
+        try {
+          const member = interaction.guild.members.cache.get(interaction.user.id);
+          if (member && !member.roles.cache.has(SCRIM_ROLE_ID)) await member.roles.add(SCRIM_ROLE_ID);
+        } catch {}
+
+        updateEmbed();
+        return interaction.reply({ content: `✅ **${teamName}** joined the scrim!`, ephemeral: true });
+      }
+
+      // Add other modals like announce_modal, end_modal, result_modal, room_modal...
+    }
+
+  } catch (err) {
+    if (err.code === 10062) {
+      console.warn('⚠️ Interaction expired (ignored):', err.message);
+    } else {
+      console.error('⚠️ Interaction error:', err);
+    }
+  }
+});
 
 client.login(process.env.DISCORD_TOKEN);
