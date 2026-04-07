@@ -125,6 +125,47 @@ client.on('messageCreate', async (message) => {
     return message.reply(`✅ Match #${id} deleted from history.`);
   }
 
+  // 📖 HELP COMMAND
+if (cmd === 'help') {
+
+  const embed = new EmbedBuilder()
+    .setTitle('📖 SAFFRON SCRIMS BOT - HELP')
+    .setColor('Orange')
+    .setDescription('Here are all available commands:')
+
+    .addFields(
+      {
+        name: '🎮 Scrim Commands',
+        value:
+          '`!createscrim` → Create a new scrim\n' +
+          '`!results` → Show current scrim results'
+      },
+      {
+        name: '📊 Match Commands',
+        value:
+          '`!history` → View last 10 matches\n' +
+          '`!match <id>` → View match details\n' +
+          '`!deletematch <id>` → Delete a match'
+      },
+      {
+        name: '📢 Utility',
+        value:
+          '`!announce` → Send announcement\n' +
+          '`!help` → Show this help menu'
+      },
+      {
+        name: '⚡ Interactive Buttons',
+        value:
+          'Join / Leave / Lock / End / Submit Results\n' +
+          '(Use buttons in scrim message)'
+      }
+    )
+    .setFooter({ text: '🔥 Saffron Scrims Bot | Automated Scrims System' })
+    .setTimestamp();
+
+  return message.channel.send({ embeds: [embed] });
+}
+
   // 📢 ANNOUNCE COMMAND
   if (cmd === 'announce') {
     const button = new ButtonBuilder()
