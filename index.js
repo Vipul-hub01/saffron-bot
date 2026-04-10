@@ -202,4 +202,42 @@ client.on('interactionCreate', async (interaction) => {
           const isStaff = interaction.member.permissions.has('Administrator') || interaction.member.roles.cache.has(HOST_ROLE_ID);
           if (!isStaff) return interaction.reply({ content: '❌ Staff only!', ephemeral: true });
           
-          await Match.create({ matchId: scrim.matchId, host: scrim.hostName, teams:
+          await Match.create({ matchId: scrim.matchId, host: scrim.hostName, teams: scrim.teams });
+          await interaction.message.delete().catch(() => {});
+          activeScrims.delete(interaction.message.id);
+          return interaction.reply({ content: '✅ Scrim ended and saved.', ephemeral: true });
+      }
+
+      // --- MODAL SUBMISSIONS ---
+      if (interaction.isModalSubmit()) {
+          const name = interaction.fields.getTextInputValue('n');
+          
+          if (interaction.customId.startsWith('tmod_')) {
+              tourney.teams.push({ name, userId: interaction.user.id });
+              await tourney.message.edit({ embeds: [EmbedBuilder.from(tourney.message.embeds[0]).setFields({ name: '📊 Slots', value: `\`${tourney.teams.length} / 100\`` })] });
+              return interaction.reply({ content: `✅ Registered as ${name}`, ephemeral: true });
+          }
+
+          if (interaction.customId.startsWith('smod_')) {
+              scrim.teams.push({ name, userId: interaction.user.id });
+              const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
+              if (member) await member.roles.add(SCRIM_ROLE_ID).catch(() => {});
+              updateScrimEmbed(scrim);
+              return interaction.reply({ content: `✅ Joined scrim as ${name}`, ephemeral: true });
+          }
+      }
+    } catch (e) { console.error(e); }
+});
+
+function updateScrimEmbed(scrim) {
+  const embed = new EmbedBuilder()
+    .setTitle(`🔥 SCRIM MATCH #${scrim.matchId}`)
+    .setColor('#e67e22')
+    .addFields(
+      { name: '🎮 Slots', value: `\`${scrim.teams.length} / 25\`` },
+      { name: '📋 Teams', value: scrim.teams.map((t, i) => `${i + 1}. ${t.name}`).join('\n') || 'No teams' }
+    );
+  scrim.message.edit({ embeds: [embed] }).catch(() => {});
+}
+
+client.login(process.env.DISCORD_TOKEN);
