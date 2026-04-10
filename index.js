@@ -21,14 +21,19 @@ const matchSchema = new mongoose.Schema({
 const Match = mongoose.model('Match', matchSchema);
 
 const tourneySchema = new mongoose.Schema({
-  tourneyId: Number, // 🔥 Changed to Number for simple 1, 2, 3...
-  hostId: String, hostName: String, maxTeams: { type: Number, default: 100 }, teams: Array, status: { type: String, default: 'registering' }, createdAt: { type: Date, default: Date.now }
+  tourneyId: Number, 
+  hostId: String, 
+  hostName: String, 
+  maxTeams: { type: Number, default: 100 }, 
+  teams: Array, 
+  status: { type: String, default: 'registering' }, 
+  createdAt: { type: Date, default: Date.now }
 });
 const Tourney = mongoose.model('Tourney', tourneySchema);
 
 // 🔢 COUNTERS
 let matchCounter = 0;
-let tourneyCounter = 0; // 🔥 Added Tournament Counter
+let tourneyCounter = 0;
 
 async function loadCounters() {
   const lastMatch = await Match.findOne().sort({ matchId: -1 });
@@ -36,13 +41,15 @@ async function loadCounters() {
 
   const lastTourney = await Tourney.findOne().sort({ tourneyId: -1 });
   if (lastTourney) tourneyCounter = lastTourney.tourneyId;
+  
+  console.log(`📊 Counters Loaded -> Scrims: ${matchCounter}, Tourneys: ${tourneyCounter}`);
 }
 
 async function connectDB() {
   try { 
     await mongoose.connect(process.env.MONGODB_URI); 
     console.log('✅ Connected to MongoDB'); 
-    await loadCounters(); // Load both counters on startup
+    await loadCounters();
   } catch (err) { 
     console.error('⚠️ MongoDB connection failed:', err.message); 
   }
@@ -90,19 +97,17 @@ client.on('messageCreate', async (message) => {
   const isStaff = message.member.permissions.has('Administrator') || message.member.roles.cache.has(HOST_ROLE_ID);
   if (!isStaff) return;
 
-  // 🏆 CREATE TOURNAMENT (UPDATED WITH SIMPLE ID)
+  // 🏆 CREATE TOURNAMENT
   if (cmd === 'createtourney') {
-    tourneyCounter++; // Increment the counter (1, 2, 3...)
-    
+    tourneyCounter++;
     const tourneyId = tourneyCounter; 
     const newTourney = { tourneyId, hostId: message.author.id, hostName: message.author.username, teams: [], maxTeams: 100, status: 'registering', message: null };
     
     const embed = new EmbedBuilder()
         .setTitle(`🏆 TOURNAMENT REGISTRATION #${tourneyId}`)
-        .setDescription(`Click the button below to register. Teams will be auto-sorted into Groups A, B, C, and D.`)
+        .setDescription(`Click the button below to register your team.`)
         .addFields({ name: '📊 Registered Teams', value: '0/100' })
-        .setColor('Purple')
-        .setFooter({ text: `Tournament ID: ${tourneyId}` });
+        .setColor('Purple');
 
     const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('tourney_join').setLabel('Register Team').setStyle(ButtonStyle.Success),
@@ -112,139 +117,4 @@ client.on('messageCreate', async (message) => {
     const panelMsg = await message.channel.send({ embeds: [embed], components: [row] });
     newTourney.message = panelMsg;
     activeTourneys.set(panelMsg.id, newTourney);
-    
-    sendLog(message.guild, 'Tournament Started', `🏆 Registration opened for **Tournament #${tourneyId}**`, 'Purple');
-  }
-
-  // (Remaining commands like !createscrim etc. stay exactly the same)
-  if (cmd === 'createscrim') {
-    matchCounter++;
-    const newScrim = { matchId: matchCounter, teams: [], maxSlots: 25, hostId: message.author.id, hostName: message.author.username, locked: false, message: null, results: [] };
-    const embed = new EmbedBuilder().setTitle(`🔥 SCRIM MATCH #${newScrim.matchId}`).setDescription('Click Join to register.').addFields({ name: '🎮 Slots', value: '0/25' }).setColor('Orange');
-    const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('join').setLabel('Join').setStyle(ButtonStyle.Success), new ButtonBuilder().setCustomId('leave').setLabel('Leave').setStyle(ButtonStyle.Danger), new ButtonBuilder().setCustomId('lock').setLabel('Lock').setStyle(ButtonStyle.Primary), new ButtonBuilder().setCustomId('end').setLabel('End Scrim').setStyle(ButtonStyle.Secondary), new ButtonBuilder().setCustomId('result').setLabel('Submit Result').setStyle(ButtonStyle.Success));
-    const msg = await message.channel.send({ embeds: [embed], components: [row] });
-    newScrim.message = msg;
-    activeScrims.set(msg.id, newScrim);
-    sendLog(message.guild, 'Scrim Created', `Match #${newScrim.matchId} started by ${message.author.tag}`, 'Blue');
-  }
-});
-
-// ==========================================
-// ⚡ INTERACTION HANDLER
-// ==========================================
-client.on('interactionCreate', async (interaction) => {
-    try {
-      const isStaff = interaction.member?.permissions.has('Administrator') || interaction.member?.roles.cache.has(HOST_ROLE_ID);
-  
-      if (interaction.isButton()) {
-          const tourney = activeTourneys.get(interaction.message.id);
-  
-          if (interaction.customId === 'tourney_join' && tourney) {
-              if (tourney.teams.some(t => t.userId === interaction.user.id)) {
-                  return interaction.reply({ content: '❌ Already registered!', ephemeral: true });
-              }
-              const modal = new ModalBuilder().setCustomId(`tmodal_${interaction.message.id}`).setTitle(`Register for Tournament #${tourney.tourneyId}`);
-              modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('t_name').setLabel('Team Name').setStyle(TextInputStyle.Short).setRequired(true)));
-              return interaction.showModal(modal);
-          }
-  
-         if (interaction.customId === 'tourney_close' && tourney) {
-              if (!isStaff) return interaction.reply({ content: '❌ Staff Only!', ephemeral: true });
-              
-              if (tourney.teams.length === 0) return interaction.reply({ content: '❌ No teams registered!', ephemeral: true });
-
-              // 1. Initial Reply
-              await interaction.reply({ content: '⏳ Closing registration and shuffling teams...', ephemeral: false });
-
-              // 2. Shuffling & Grouping
-              const shuffled = [...tourney.teams].sort(() => Math.random() - 0.5);
-              const groupNames = ['A', 'B', 'C', 'D'];
-              const roleMapping = { A: ROLE_GROUP_A, B: ROLE_GROUP_B, C: ROLE_GROUP_C, D: ROLE_GROUP_D };
-              const groupLists = { A: [], B: [], C: [], D: [] };
-
-              for (let i = 0; i < shuffled.length; i++) {
-                const groupLetter = groupNames[i % 4]; 
-                shuffled[i].group = groupLetter;
-                groupLists[groupLetter].push(shuffled[i].name);
-                
-                // Assign roles in background
-                try {
-                  const member = await interaction.guild.members.fetch(shuffled[i].userId).catch(() => null);
-                  if (member && roleMapping[groupLetter]) await member.roles.add(roleMapping[groupLetter]);
-                } catch (err) { console.error(`Failed to add role for ${shuffled[i].name}`); }
-              }
-
-              // 3. Save to Database
-              await Tourney.create({ 
-                tourneyId: tourney.tourneyId, 
-                hostId: tourney.hostId, 
-                hostName: tourney.hostName, 
-                teams: shuffled, 
-                status: 'grouped' 
-              });
-
-              // 4. Create Final Results Embed
-              const finalEmbed = new EmbedBuilder()
-                .setTitle(`🏆 GROUPS FOR TOURNAMENT #${tourney.tourneyId}`)
-                .setColor('Gold')
-                .addFields(
-                  { name: '📘 Group A', value: groupLists.A.join('\n') || 'Empty', inline: true },
-                  { name: '📕 Group B', value: groupLists.B.join('\n') || 'Empty', inline: true },
-                  { name: '\u200B', value: '\u200B' }, 
-                  { name: '📗 Group C', value: groupLists.C.join('\n') || 'Empty', inline: true },
-                  { name: '📒 Group D', value: groupLists.D.join('\n') || 'Empty', inline: true }
-                )
-                .setTimestamp();
-
-              // 5. Send Results and Cleanup
-              await interaction.channel.send({ embeds: [finalEmbed] });
-              
-              // Remove buttons from the original registration panel
-              if (tourney.message) await tourney.message.edit({ components: [] }).catch(() => {});
-              
-              activeTourneys.delete(interaction.message.id);
-              sendLog(interaction.guild, 'Tournament Grouped', `🛑 Groups generated for Tournament #${tourney.tourneyId}`, 'DarkRed');
-              
-              return interaction.editReply({ content: `✅ Tournament #${tourney.tourneyId} successfully closed!` });
-          }
-  
-              await Tourney.create({ tourneyId: tourney.tourneyId, hostId: tourney.hostId, hostName: tourney.hostName, teams: shuffled, status: 'grouped' });
-  
-              const finalEmbed = new EmbedBuilder()
-                .setTitle(`🏆 GROUPS FOR TOURNAMENT #${tourney.tourneyId}`)
-                .setColor('Gold')
-                .addFields(
-                  { name: '📘 Group A', value: groupLists.A.join('\n') || 'None', inline: true },
-                  { name: '📕 Group B', value: groupLists.B.join('\n') || 'None', inline: true },
-                  { name: '📗 Group C', value: groupLists.C.join('\n') || 'None', inline: true },
-                  { name: '📒 Group D', value: groupLists.D.join('\n') || 'None', inline: true }
-                );
-  
-              await interaction.channel.send({ embeds: [finalEmbed] });
-              tourney.message.edit({ components: [] }).catch(()=>{}); 
-              activeTourneys.delete(interaction.message.id);
-              sendLog(interaction.guild, 'Tournament Grouped', `🛑 Groups generated for Tournament #${tourney.tourneyId}`, 'DarkRed');
-          }
-      }
-  
-      if (interaction.isModalSubmit()) {
-          if (interaction.customId.startsWith('tmodal_')) {
-              const msgId = interaction.customId.split('_')[1];
-              const tourney = activeTourneys.get(msgId);
-              if (!tourney) return interaction.reply({ content: '❌ Not active.', ephemeral: true });
-  
-              const teamName = interaction.fields.getTextInputValue('t_name');
-              tourney.teams.push({ name: teamName, userId: interaction.user.id });
-  
-              const updatedEmbed = EmbedBuilder.from(tourney.message.embeds[0]).setFields({ name: '📊 Registered Teams', value: `${tourney.teams.length}/${tourney.maxTeams}` });
-              await tourney.message.edit({ embeds: [updatedEmbed] });
-  
-              sendLog(interaction.guild, 'Tourney Join', `🏆 **${interaction.user.tag}** joined Tourney #${tourney.tourneyId} as **${teamName}**`, 'Purple');
-              return interaction.reply({ content: `✅ Registered **${teamName}** for Tournament #${tourney.tourneyId}!`, ephemeral: true });
-          }
-          // (Scrim join modal logic remains the same)
-      }
-    } catch (err) { console.error(err); }
-  });
-
-client.login(process.env.DISCORD_TOKEN);
+    sendLog(message.guild, 'Tournament Started',
