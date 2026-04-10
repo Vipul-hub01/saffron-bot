@@ -91,6 +91,34 @@ client.on('messageCreate', async (message) => {
   const args = message.content.slice(1).trim().split(/ +/);
   const cmd = args.shift().toLowerCase();
 
+  // 🆘 HELP COMMAND
+  if (cmd === 'help') {
+    if (!message.member.permissions.has('Administrator')) return message.reply('❌ Only Admins can view the command list.');
+
+    const embed = new EmbedBuilder()
+      .setTitle('🤖 Saffron Bot - Admin Control Panel')
+      .setDescription('Here are all the commands you can use to manage your server:')
+      .setColor('Blurple')
+      .addFields(
+        { 
+          name: '🎮 Scrim Management', 
+          value: '`!createscrim` — Opens a new scrim lobby panel.\n`!history` — View the last 10 past matches.\n`!match <id>` — View details and results of a specific match.\n`!deletematch <id>` — Permanently delete a match from history.' 
+        },
+        { 
+          name: '🏆 Tournament System', 
+          value: '`!createtourney` — Launches a 100-team tournament registration panel. Groups and roles are assigned automatically when closed.' 
+        },
+        { 
+          name: '🛠️ Utility Commands', 
+          value: '`!announce` — Opens a form to send an official server announcement.\n`!idp` — Opens a form to silently send Room ID & Passwords to any channel.' 
+        }
+      )
+      .setFooter({ text: 'Saffron Scrims & Tournaments' })
+      .setTimestamp();
+
+    return message.channel.send({ embeds: [embed] });
+  }
+
   // ----------------------------------------
   // SCRIM COMMANDS 
   // ----------------------------------------
@@ -138,7 +166,7 @@ client.on('messageCreate', async (message) => {
     return message.reply({ content: 'Click button to create announcement', components: [new ActionRowBuilder().addComponents(button)] });
   }
 
-  // 🆔 ID/PASS COMMAND (NEW)
+  // 🆔 ID/PASS COMMAND
   if (cmd === 'idp') {
     if (!message.member.permissions.has('Administrator')) return message.reply('❌ Only Admins can use this.');
     const button = new ButtonBuilder().setCustomId('open_idp').setLabel('Enter ID & Password').setStyle(ButtonStyle.Success);
@@ -258,7 +286,7 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.showModal(modal);
       }
 
-      // 🔴 CLOSE & DISTRIBUTE (WITH SECURITY FIX)
+      // 🔴 CLOSE & DISTRIBUTE 
       if (interaction.customId === 'tourney_close') {
         
         const isHost = interaction.user.id === tourney.hostId;
