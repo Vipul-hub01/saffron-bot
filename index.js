@@ -43,8 +43,16 @@ const client = new Client({
   ]
 });
 
+// 🔥 CONFIG
 const SCRIM_ROLE_ID = "1488611595318988850";
 const LOG_CHANNEL_ID = "1489298280960622805";
+
+const GROUP_ROLES = {
+  A: '1492126223298596864',
+  B: '1492126277199728741',
+  C: '1492126324930641950',
+  D: '1492126364218953831'
+};
 
 let currentScrim = null;
 
@@ -64,6 +72,7 @@ client.on('messageCreate', async (message) => {
 
   // CREATE SCRIM
   if (cmd === 'createscrim') {
+
     matchCounter++;
 
     currentScrim = {
@@ -77,17 +86,18 @@ client.on('messageCreate', async (message) => {
       locked: false,
       roomId: null,
       password: null,
-      results: []
+      results: [],
+      createdAt: new Date()
     };
 
     const embed = new EmbedBuilder()
       .setTitle(`🔥 MATCH #${matchCounter}`)
+      .setColor('Orange')
       .addFields(
         { name: "👑 Host", value: currentScrim.hostName },
         { name: "🎮 Slots", value: "0/25" },
         { name: "📋 Teams", value: "No teams yet" }
-      )
-      .setColor("Orange");
+      );
 
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId('join').setLabel('Join').setStyle(ButtonStyle.Success),
@@ -103,16 +113,19 @@ client.on('messageCreate', async (message) => {
 
   // GROUPS
   if (cmd === 'groups') {
-    if (!currentScrim) return;
-    distributeGroups();
+    if (!currentScrim) return message.reply('❌ No active scrim');
+
+    await clearGroupRoles(message.guild);
+    await distributeGroups(message.guild);
 
     const embed = new EmbedBuilder()
-      .setTitle("🏆 Groups")
+      .setTitle('🏆 GROUPS')
+      .setColor('Gold')
       .addFields(
-        { name: "A", value: list(currentScrim.groups.A) },
-        { name: "B", value: list(currentScrim.groups.B) },
-        { name: "C", value: list(currentScrim.groups.C) },
-        { name: "D", value: list(currentScrim.groups.D) }
+        { name: 'A', value: list(currentScrim.groups.A) },
+        { name: 'B', value: list(currentScrim.groups.B) },
+        { name: 'C', value: list(currentScrim.groups.C) },
+        { name: 'D', value: list(currentScrim.groups.D) }
       );
 
     message.channel.send({ embeds: [embed] });
@@ -124,7 +137,7 @@ client.on('messageCreate', async (message) => {
     if (!['A','B','C','D'].includes(g)) return;
 
     const embed = new EmbedBuilder()
-      .setTitle(`🏠 Group ${g}`)
+      .setTitle(`🏠 GROUP ${g}`)
       .addFields(
         { name: "Room ID", value: currentScrim.roomId || "Not set" },
         { name: "Password", value: currentScrim.password || "Not set" }
@@ -156,9 +169,11 @@ client.on('interactionCreate', async (interaction) => {
       return interaction.editReply({ content: "❌ No active scrim" });
     }
 
-    // ANNOUNCE
+    // ANNOUNCE BUTTON
     if (interaction.customId === 'announce_btn') {
-      const modal = new ModalBuilder().setCustomId('announce_modal').setTitle('Announcement');
+      const modal = new ModalBuilder()
+        .setCustomId('announce_modal')
+        .setTitle('Announcement');
 
       modal.addComponents(
         new ActionRowBuilder().addComponents(
@@ -172,20 +187,26 @@ client.on('interactionCreate', async (interaction) => {
       return interaction.showModal(modal);
     }
 
+    // ANNOUNCE SUBMIT
     if (interaction.isModalSubmit() && interaction.customId === 'announce_modal') {
       const msg = interaction.fields.getTextInputValue('msg');
       const ch = interaction.fields.getTextInputValue('ch');
+
       const channel = interaction.guild.channels.cache.get(ch);
+      if (!channel) return interaction.reply({ content: "❌ Invalid channel", ephemeral: true });
 
-      if (!channel) return interaction.reply({ content: "❌ Invalid", ephemeral: true });
+      await channel.send({
+        embeds: [new EmbedBuilder().setTitle('📢 ANNOUNCEMENT').setDescription(msg).setColor('Orange')]
+      });
 
-      await channel.send({ embeds: [new EmbedBuilder().setDescription(msg).setColor("Orange")] });
       return interaction.reply({ content: "✅ Sent", ephemeral: true });
     }
 
     // JOIN
     if (interaction.customId === 'join') {
-      const modal = new ModalBuilder().setCustomId('team_modal').setTitle('Team');
+      if (currentScrim.locked) return interaction.editReply({ content: "❌ Locked" });
+
+      const modal = new ModalBuilder().setCustomId('team_modal').setTitle('Team Name');
 
       modal.addComponents(
         new ActionRowBuilder().addComponents(
@@ -215,7 +236,7 @@ client.on('interactionCreate', async (interaction) => {
       if (interaction.user.id !== currentScrim.hostId)
         return interaction.editReply({ content: "❌ Only host" });
 
-      const modal = new ModalBuilder().setCustomId('room_modal').setTitle('Room');
+      const modal = new ModalBuilder().setCustomId('room_modal').setTitle('Room Details');
 
       modal.addComponents(
         new ActionRowBuilder().addComponents(
@@ -239,6 +260,7 @@ client.on('interactionCreate', async (interaction) => {
       const ch = interaction.fields.getTextInputValue('ch');
 
       const channel = interaction.guild.channels.cache.get(ch);
+      if (!channel) return interaction.reply({ content: "❌ Invalid channel", ephemeral: true });
 
       currentScrim.locked = true;
       currentScrim.roomId = room;
@@ -249,8 +271,8 @@ client.on('interactionCreate', async (interaction) => {
         embeds: [new EmbedBuilder()
           .setTitle("🏠 ROOM DETAILS")
           .addFields(
-            { name: "Room", value: room },
-            { name: "Pass", value: pass }
+            { name: "Room ID", value: room },
+            { name: "Password", value: pass }
           )]
       });
 
@@ -258,7 +280,7 @@ client.on('interactionCreate', async (interaction) => {
 
       // TIMER
       let t = 300;
-      const timerMsg = await channel.send("⏱️ Starting in 5:00");
+      const timerMsg = await channel.send("⏱️ Match starts in 5:00");
 
       const interval = setInterval(async () => {
         t -= 30;
@@ -272,7 +294,7 @@ client.on('interactionCreate', async (interaction) => {
       currentScrim.timerInterval = interval;
 
       updateEmbed();
-      return interaction.reply({ content: "✅ Locked", ephemeral: true });
+      return interaction.reply({ content: "✅ Locked & Room Posted", ephemeral: true });
     }
 
     // END SCRIM
@@ -280,11 +302,11 @@ client.on('interactionCreate', async (interaction) => {
       if (interaction.user.id !== currentScrim.hostId)
         return interaction.editReply({ content: "❌ Only host" });
 
-      const modal = new ModalBuilder().setCustomId('end_modal').setTitle('End');
+      const modal = new ModalBuilder().setCustomId('end_modal').setTitle('End Scrim');
 
       modal.addComponents(
         new ActionRowBuilder().addComponents(
-          new TextInputBuilder().setCustomId('ch').setLabel('Result Channel ID').setStyle(TextInputStyle.Short)
+          new TextInputBuilder().setCustomId('ch').setLabel('Results Channel ID').setStyle(TextInputStyle.Short)
         )
       );
 
@@ -296,11 +318,13 @@ client.on('interactionCreate', async (interaction) => {
       const channel = interaction.guild.channels.cache.get(ch);
 
       const sorted = [...currentScrim.results].sort((a,b)=>b.points-a.points);
-      const text = sorted.map((r,i)=>`${i+1}. ${r.team} | ${r.points}`).join('\n');
+      const text = sorted.map((r,i)=>`${i+1}. ${r.team} | ${r.points} pts`).join('\n');
 
-      await channel.send({
-        embeds: [new EmbedBuilder().setTitle("🏆 RESULTS").setDescription(text)]
-      });
+      if (channel) {
+        await channel.send({
+          embeds: [new EmbedBuilder().setTitle("🏆 RESULTS").setDescription(text)]
+        });
+      }
 
       // LOG
       const logChannel = interaction.guild.channels.cache.get(LOG_CHANNEL_ID);
@@ -308,19 +332,24 @@ client.on('interactionCreate', async (interaction) => {
         await logChannel.send({
           embeds: [new EmbedBuilder()
             .setTitle(`📋 MATCH #${currentScrim.matchId}`)
-            .setDescription(list(currentScrim.teams))]
+            .addFields(
+              { name: "Host", value: currentScrim.hostName },
+              { name: "Teams", value: list(currentScrim.teams) }
+            )]
         });
       }
 
       // REMOVE ROLES
       for (const t of currentScrim.teams) {
-        const m = await interaction.guild.members.fetch(t.userId);
-        if (m.roles.cache.has(SCRIM_ROLE_ID)) {
+        try {
+          const m = await interaction.guild.members.fetch(t.userId);
           await m.roles.remove(SCRIM_ROLE_ID);
-        }
+          for (const roleId of Object.values(GROUP_ROLES)) {
+            await m.roles.remove(roleId);
+          }
+        } catch {}
       }
 
-      // SAVE
       await Match.create(currentScrim);
 
       currentScrim = null;
@@ -330,7 +359,7 @@ client.on('interactionCreate', async (interaction) => {
 
     // RESULT
     if (interaction.customId === 'result') {
-      const modal = new ModalBuilder().setCustomId('res_modal').setTitle('Result');
+      const modal = new ModalBuilder().setCustomId('res_modal').setTitle('Submit Result');
 
       modal.addComponents(
         new ActionRowBuilder().addComponents(
@@ -368,6 +397,9 @@ client.on('interactionCreate', async (interaction) => {
       if (currentScrim.teams.some(t=>t.userId===interaction.user.id))
         return interaction.reply({ content:"❌ Already joined", ephemeral:true });
 
+      if (currentScrim.leftPlayers.includes(interaction.user.id))
+        return interaction.reply({ content:"❌ Rejoin disabled", ephemeral:true });
+
       currentScrim.teams.push({ name, userId: interaction.user.id });
 
       const member = await interaction.guild.members.fetch(interaction.user.id);
@@ -387,12 +419,37 @@ function list(arr) {
   return arr.length ? arr.map(x=>x.name).join('\n') : "Empty";
 }
 
-function distributeGroups() {
+async function clearGroupRoles(guild) {
+  for (const roleId of Object.values(GROUP_ROLES)) {
+    const role = guild.roles.cache.get(roleId);
+    if (!role) continue;
+
+    for (const member of role.members.values()) {
+      try { await member.roles.remove(role); } catch {}
+    }
+  }
+}
+
+async function distributeGroups(guild) {
   const g = {A:[],B:[],C:[],D:[]};
+
   currentScrim.teams.forEach((t,i)=>{
     g[['A','B','C','D'][i%4]].push(t);
   });
+
   currentScrim.groups = g;
+
+  for (const key of Object.keys(g)) {
+    const role = guild.roles.cache.get(GROUP_ROLES[key]);
+    if (!role) continue;
+
+    for (const player of g[key]) {
+      try {
+        const member = await guild.members.fetch(player.userId);
+        await member.roles.add(role);
+      } catch {}
+    }
+  }
 }
 
 async function updateEmbed() {
@@ -400,6 +457,7 @@ async function updateEmbed() {
 
   const embed = new EmbedBuilder()
     .setTitle(`🔥 MATCH #${currentScrim.matchId}`)
+    .setColor('Orange')
     .addFields(
       { name:"👑 Host", value:currentScrim.hostName },
       { name:"🎮 Slots", value:`${currentScrim.teams.length}/25` },
