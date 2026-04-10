@@ -47,11 +47,12 @@ const client = new Client({
   ]
 });
 
-// ✅ YOUR ROLE ID ADDED HERE
+// ✅ YOUR ROLE & CHANNEL IDs
 const SCRIM_ROLE_ID = "1488611595318988850";
 const LOG_CHANNEL_ID = "1489298280960622805";
 
-let currentScrim = null;
+// 🔥 THE MULTI-LOBBY UPGRADE
+const activeScrims = new Map(); 
 
 client.once('ready', async () => {
   await connectDB();
@@ -70,10 +71,7 @@ client.on('messageCreate', async (message) => {
   if (cmd === 'history') {
     try {
       const scrims = await Match.find().sort({ matchId: -1 }).limit(10);
-
-      if (scrims.length === 0) {
-        return message.reply('❌ No scrim history found!');
-      }
+      if (scrims.length === 0) return message.reply('❌ No scrim history found!');
 
       const historyText = scrims.map((s, i) =>
         `**#${i + 1} Match ${s.matchId}** — Host: ${s.host} | Teams: ${s.teams.length} | ${new Date(s.createdAt).toLocaleDateString()}`
@@ -86,11 +84,11 @@ client.on('messageCreate', async (message) => {
 
       return message.channel.send({ embeds: [embed] });
     } catch (err) {
-      console.error('⚠️ History fetch error:', err.message);
       return message.reply('❌ Could not fetch history.');
     }
   }
 
+  // 📋 MATCH COMMAND
   if (cmd === 'match') {
     const id = parseInt(args[0]);
     if (!id) return message.reply('❌ Usage: `!match <id>`');
@@ -98,7 +96,6 @@ client.on('messageCreate', async (message) => {
     if (!match) return message.reply('❌ Match not found');
 
     const teams = match.teams.map((t, i) => `${i + 1}. ${t.name}`).join('\n');
-
     const sorted = [...(match.results || [])].sort((a, b) => b.points - a.points);
     const resultsText = sorted.length
       ? sorted.map((r, i) => `${i + 1}. ${r.team} | ${r.points} pts (Pos: ${r.position} | ${r.kills} K)`).join('\n')
@@ -117,6 +114,7 @@ client.on('messageCreate', async (message) => {
     return message.channel.send({ embeds: [embed] });
   }
 
+  // 🗑️ DELETEMATCH COMMAND
   if (cmd === 'deletematch') {
     const id = parseInt(args[0]);
     if (!id) return message.reply('❌ Usage: `!deletematch <id>`');
@@ -127,44 +125,15 @@ client.on('messageCreate', async (message) => {
 
   // 📢 ANNOUNCE COMMAND
   if (cmd === 'announce') {
-    const button = new ButtonBuilder()
-      .setCustomId('open_announce')
-      .setLabel('Create Announcement')
-      .setStyle(ButtonStyle.Primary);
-
-    const row = new ActionRowBuilder().addComponents(button);
-
-    return message.reply({
-      content: 'Click button to create announcement',
-      components: [row]
-    });
+    const button = new ButtonBuilder().setCustomId('open_announce').setLabel('Create Announcement').setStyle(ButtonStyle.Primary);
+    return message.reply({ content: 'Click button to create announcement', components: [new ActionRowBuilder().addComponents(button)] });
   }
 
-  // 📊 RESULTS COMMAND
-  if (cmd === 'results') {
-    if (!currentScrim || !currentScrim.results || currentScrim.results.length === 0) {
-      return message.reply('❌ No results submitted yet!');
-    }
-
-    const sorted = currentScrim.results.sort((a, b) => b.points - a.points);
-
-    const resultText = sorted.map((r, i) =>
-      `${i + 1}. ${r.team} | ${r.points} pts (Pos: ${r.position} | ${r.kills} K)`
-    ).join('\n');
-
-    const embed = new EmbedBuilder()
-      .setTitle(`🏆 SCRIM RESULTS - MATCH #${currentScrim.matchId}`)
-      .setDescription(resultText)
-      .setColor('Gold');
-
-    return message.channel.send({ embeds: [embed] });
-  }
-
+  // 🔥 CREATESCRIM COMMAND
   if (cmd === 'createscrim') {
-
     matchCounter++;
 
-    currentScrim = {
+    const newScrim = {
       matchId: matchCounter,
       teams: [],
       maxSlots: 25,
@@ -173,14 +142,15 @@ client.on('messageCreate', async (message) => {
       locked: false,
       roomId: null,
       password: null,
-      results: []
+      results: [],
+      message: null
     };
 
     const embed = new EmbedBuilder()
-      .setTitle(`🔥 SAFFRON SCRIM BOT - MATCH #${currentScrim.matchId}`)
+      .setTitle(`🔥 SAFFRON SCRIM BOT - MATCH #${newScrim.matchId}`)
       .setDescription('Click buttons below to join or leave the scrim')
       .addFields(
-        { name: '👑 Host', value: currentScrim.hostName },
+        { name: '👑 Host', value: newScrim.hostName },
         { name: '🎮 Slots', value: '0/25' },
         { name: '📋 Teams', value: 'No teams yet' }
       )
@@ -194,476 +164,224 @@ client.on('messageCreate', async (message) => {
       new ButtonBuilder().setCustomId('result').setLabel('Submit Result').setStyle(ButtonStyle.Success)
     );
 
-    const msg = await message.channel.send({
-      embeds: [embed],
-      components: [row]
-    });
-
-    currentScrim.message = msg;
+    const msg = await message.channel.send({ embeds: [embed], components: [row] });
+    
+    // Save to Map using the message ID!
+    newScrim.message = msg;
+    activeScrims.set(msg.id, newScrim);
   }
 });
 
 // ⚡ BUTTON + MODAL HANDLER
-client.on('error', err => console.warn('⚠️ Discord client error:', err.message));
-
 client.on('interactionCreate', async (interaction) => {
   try {
-
-  // 📢 ANNOUNCE BUTTON → OPEN MODAL
-  if (interaction.isButton() && interaction.customId === 'open_announce') {
-    if (!interaction.member.permissions.has('Administrator')) {
-      return interaction.reply({ content: '❌ No permission', ephemeral: true });
-    }
-
-    const modal = new ModalBuilder()
-      .setCustomId('announce_modal')
-      .setTitle('Send Announcement');
-
-    const msgInput = new TextInputBuilder()
-      .setCustomId('announce_msg')
-      .setLabel('Enter Message')
-      .setStyle(TextInputStyle.Paragraph)
-      .setRequired(true);
-
-    const channelInput = new TextInputBuilder()
-      .setCustomId('announce_channel')
-      .setLabel('Enter Channel ID')
-      .setStyle(TextInputStyle.Short)
-      .setRequired(true);
-
-    modal.addComponents(
-      new ActionRowBuilder().addComponents(msgInput),
-      new ActionRowBuilder().addComponents(channelInput)
-    );
-
-    return interaction.showModal(modal);
-  }
-
-  // 📢 ANNOUNCE MODAL SUBMIT
-  if (interaction.isModalSubmit() && interaction.customId === 'announce_modal') {
-    const msg = interaction.fields.getTextInputValue('announce_msg');
-    const channelId = interaction.fields.getTextInputValue('announce_channel');
-
-    const targetChannel = interaction.guild.channels.cache.get(channelId);
-    if (!targetChannel) {
-      return interaction.reply({ content: '❌ Invalid channel ID', ephemeral: true });
-    }
-
-    const embed = new EmbedBuilder()
-      .setTitle('📢 ANNOUNCEMENT')
-      .setDescription(msg)
-      .setColor('Orange')
-      .setTimestamp();
-
-    await targetChannel.send({ embeds: [embed] });
-
-    return interaction.reply({ content: '✅ Announcement sent!', ephemeral: true });
-  }
-
-  // 🟢 JOIN BUTTON → OPEN MODAL
-  if (interaction.isButton() && interaction.customId === 'join') {
-    if (!currentScrim) {
-      return interaction.reply({ content: '❌ No active scrim!', ephemeral: true });
-    }
-
-    if (currentScrim.locked) {
-      return interaction.reply({ content: '❌ Scrim is locked!', ephemeral: true });
-    }
-
-    const modal = new ModalBuilder()
-      .setCustomId('team_modal')
-      .setTitle('Enter Team Name');
-
-    const input = new TextInputBuilder()
-      .setCustomId('team_name')
-      .setLabel('Your Team Name')
-      .setStyle(TextInputStyle.Short)
-      .setRequired(true);
-
-    const row = new ActionRowBuilder().addComponents(input);
-    modal.addComponents(row);
-
-    return interaction.showModal(modal);
-  }
-
-  // 🔴 LEAVE BUTTON
-  if (interaction.isButton() && interaction.customId === 'leave') {
-    if (!currentScrim) return;
-
-    currentScrim.teams = currentScrim.teams.filter(
-      t => t.userId !== interaction.user.id
-    );
-
-    updateEmbed();
-
-    try {
-      const member = interaction.guild.members.cache.get(interaction.user.id);
-      if (member && member.roles.cache.has(SCRIM_ROLE_ID)) {
-        await member.roles.remove(SCRIM_ROLE_ID);
-      }
-    } catch (err) {
-      console.warn('⚠️ Could not remove role:', err.message);
-    }
-
-    return interaction.reply({
-      content: '❌ You left the scrim',
-      ephemeral: true
-    });
-  }
-
-  // 🛑 END SCRIM (HOST ONLY) → ASK FOR RESULTS CHANNEL
-  if (interaction.isButton() && interaction.customId === 'end') {
-
-    if (!currentScrim) {
-      return interaction.reply({ content: '❌ No active scrim!', ephemeral: true });
-    }
-
-    if (interaction.user.id !== currentScrim.hostId) {
-      return interaction.reply({
-        content: '❌ Only host can end the scrim!',
-        ephemeral: true
-      });
-    }
-
-    const modal = new ModalBuilder()
-      .setCustomId('end_modal')
-      .setTitle('End Scrim — Post Results');
-
-    const channelInput = new TextInputBuilder()
-      .setCustomId('results_channel_id')
-      .setLabel('Channel ID to post results')
-      .setStyle(TextInputStyle.Short)
-      .setPlaceholder('Paste channel ID here')
-      .setRequired(true);
-
-    modal.addComponents(new ActionRowBuilder().addComponents(channelInput));
-
-    return interaction.showModal(modal);
-  }
-
-  // 🛑 END MODAL SUBMIT
-  if (interaction.isModalSubmit() && interaction.customId === 'end_modal') {
-
-    const resultsChannelId = interaction.fields.getTextInputValue('results_channel_id');
-    const resultsChannel = interaction.guild.channels.cache.get(resultsChannelId);
-
-    if (!resultsChannel) {
-      return interaction.reply({ content: '❌ Invalid channel ID!', ephemeral: true });
-    }
-
-    // 🏆 POST RESULTS
-    if (currentScrim.results && currentScrim.results.length > 0) {
-      const sorted = [...currentScrim.results].sort((a, b) => b.points - a.points);
-      const resultText = sorted.map((r, i) =>
-        `${i + 1}. ${r.team} | ${r.points} pts (Pos: ${r.position} | ${r.kills} K)`
-      ).join('\n');
-
-      const resultsEmbed = new EmbedBuilder()
-        .setTitle(`🏆 SCRIM RESULTS - MATCH #${currentScrim.matchId}`)
-        .setDescription(resultText)
-        .setColor('Gold')
-        .setTimestamp();
-
-      await resultsChannel.send({ embeds: [resultsEmbed] });
-    }
-
-    // 📋 SEND TRANSCRIPT TO LOG CHANNEL
-    const teamList = currentScrim.teams.length
-      ? currentScrim.teams.map((t, i) => `${i + 1}. ${t.name}`).join('\n')
-      : 'No teams joined';
-
-    const logChannel = interaction.guild.channels.cache.get(LOG_CHANNEL_ID);
-    if (logChannel) {
-      const logEmbed = new EmbedBuilder()
-        .setTitle(`📋 SCRIM TRANSCRIPT - MATCH #${currentScrim.matchId}`)
-        .setColor('Orange')
-        .addFields(
-          { name: '👑 Host', value: currentScrim.hostName },
-          { name: '🎮 Total Teams', value: `${currentScrim.teams.length}` },
-          { name: '📋 Team List', value: teamList }
-        )
-        .setTimestamp();
-
-      logChannel.send({ embeds: [logEmbed] });
-    }
-
-    // 🔥 Remove roles from all players
-    for (const team of currentScrim.teams) {
-      try {
-        const member = interaction.guild.members.cache.get(team.userId);
-        if (member && member.roles.cache.has(SCRIM_ROLE_ID)) {
-          await member.roles.remove(SCRIM_ROLE_ID);
-        }
-      } catch (err) {
-        console.warn('⚠️ Could not remove role:', err.message);
-      }
-    }
-
-    // ⏱️ Clear timer if still running
-    if (currentScrim.timerInterval) {
-      clearInterval(currentScrim.timerInterval);
-    }
-
-    // 🧹 Delete room details message
-    if (currentScrim.roomMessage) {
-      try { await currentScrim.roomMessage.delete(); } catch {}
-    }
-
-    // 🧹 Delete scrim message
-    try { await currentScrim.message.delete(); } catch {}
-
-    // 🗄️ SAVE TO MONGODB
-    try {
-      await Match.create({
-        matchId: currentScrim.matchId,
-        host: currentScrim.hostName,
-        teams: currentScrim.teams,
-        results: currentScrim.results || []
-      });
-      console.log(`✅ Match #${currentScrim.matchId} saved to DB`);
-    } catch (err) {
-      console.warn('⚠️ Could not save to MongoDB:', err.message);
-    }
-
-    // 🔄 Reset scrim
-    currentScrim = null;
-
-    return interaction.reply({
-      content: '✅ Scrim ended, results & transcript posted, roles removed!',
-      ephemeral: true
-    });
-  }
-
-  // 🔒 LOCK BUTTON (HOST ONLY)
-  if (interaction.isButton() && interaction.customId === 'lock') {
-
-    if (interaction.user.id !== currentScrim.hostId) {
-      return interaction.reply({
-        content: '❌ Only host can lock the scrim!',
-        ephemeral: true
-      });
-    }
-
-    const modal = new ModalBuilder()
-      .setCustomId('room_modal')
-      .setTitle('Enter Room Details');
-
-    const roomInput = new TextInputBuilder()
-      .setCustomId('room_id')
-      .setLabel('Room ID')
-      .setStyle(TextInputStyle.Short)
-      .setRequired(true);
-
-    const passInput = new TextInputBuilder()
-      .setCustomId('room_pass')
-      .setLabel('Password')
-      .setStyle(TextInputStyle.Short)
-      .setRequired(true);
-
-    const channelInput = new TextInputBuilder()
-      .setCustomId('channel_id')
-      .setLabel('Channel ID to post details')
-      .setStyle(TextInputStyle.Short)
-      .setPlaceholder('Paste channel ID here')
-      .setRequired(true);
-
-    modal.addComponents(
-      new ActionRowBuilder().addComponents(roomInput),
-      new ActionRowBuilder().addComponents(passInput),
-      new ActionRowBuilder().addComponents(channelInput)
-    );
-
-    return interaction.showModal(modal);
-  }
-
-  // 🔒 ROOM MODAL SUBMIT
-  if (interaction.isModalSubmit() && interaction.customId === 'room_modal') {
-
-    const roomId = interaction.fields.getTextInputValue('room_id');
-    const password = interaction.fields.getTextInputValue('room_pass');
-    const channelId = interaction.fields.getTextInputValue('channel_id');
-
-    const targetChannel = interaction.guild.channels.cache.get(channelId);
-
-    if (!targetChannel) {
-      return interaction.reply({
-        content: '❌ Invalid channel ID!',
-        ephemeral: true
-      });
-    }
-
-    currentScrim.locked = true;
-    currentScrim.roomId = roomId;
-    currentScrim.password = password;
-
-    // 🔥 POST ROOM DETAILS WITH ROLE MENTION
-    const roomEmbed = new EmbedBuilder()
-      .setTitle('🏠 SCRIM ROOM DETAILS')
-      .setColor('Orange')
-      .addFields(
-        { name: '🏠 Room ID', value: roomId },
-        { name: '🔑 Password', value: password }
+    // 📢 ANNOUNCEMENT LOGIC (Unchanged, not tied to a specific scrim)
+    if (interaction.isButton() && interaction.customId === 'open_announce') {
+      if (!interaction.member.permissions.has('Administrator')) return interaction.reply({ content: '❌ No permission', ephemeral: true });
+      const modal = new ModalBuilder().setCustomId('announce_modal').setTitle('Send Announcement');
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('announce_msg').setLabel('Message').setStyle(TextInputStyle.Paragraph).setRequired(true)),
+        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('announce_channel').setLabel('Channel ID').setStyle(TextInputStyle.Short).setRequired(true))
       );
+      return interaction.showModal(modal);
+    }
 
-    const roomMessage = await targetChannel.send({
-      content: `<@&${SCRIM_ROLE_ID}>`, // 🔥 mention role
-      embeds: [roomEmbed]
-    });
+    if (interaction.isModalSubmit() && interaction.customId === 'announce_modal') {
+      const msg = interaction.fields.getTextInputValue('announce_msg');
+      const targetChannel = interaction.guild.channels.cache.get(interaction.fields.getTextInputValue('announce_channel'));
+      if (!targetChannel) return interaction.reply({ content: '❌ Invalid channel ID', ephemeral: true });
+      await targetChannel.send({ embeds: [new EmbedBuilder().setTitle('📢 ANNOUNCEMENT').setDescription(msg).setColor('Orange').setTimestamp()] });
+      return interaction.reply({ content: '✅ Announcement sent!', ephemeral: true });
+    }
 
-    // Save reference so it can be deleted on end
-    currentScrim.roomMessage = roomMessage;
+    // ==========================================
+    // 🔥 SCRIM SPECIFIC BUTTON LOGIC
+    // ==========================================
 
-    // ⏱️ MATCH START TIMER (5 minutes)
-    let timeLeft = 300;
-    const timerMessage = await targetChannel.send(`⏱️ Match starts in 5:00`);
+    if (interaction.isButton() && ['join', 'leave', 'lock', 'end', 'result'].includes(interaction.customId)) {
+      const scrim = activeScrims.get(interaction.message.id);
+      if (!scrim) return interaction.reply({ content: '❌ This scrim is no longer active!', ephemeral: true });
 
-    const interval = setInterval(async () => {
-      timeLeft -= 30;
-
-      if (timeLeft <= 0) {
-        clearInterval(interval);
-        if (currentScrim) currentScrim.timerInterval = null;
-        try { await targetChannel.send('🚀 Match Started! Best of luck to all teams!'); } catch {}
-        return;
+      // 🟢 JOIN
+      if (interaction.customId === 'join') {
+        if (scrim.locked) return interaction.reply({ content: '❌ Scrim is locked!', ephemeral: true });
+        const modal = new ModalBuilder().setCustomId(`team_modal_${interaction.message.id}`).setTitle('Enter Team Name');
+        modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('team_name').setLabel('Your Team Name').setStyle(TextInputStyle.Short).setRequired(true)));
+        return interaction.showModal(modal);
       }
 
-      const minutes = Math.floor(timeLeft / 60);
-      const seconds = timeLeft % 60;
-      try {
-        await timerMessage.edit(`⏱️ Match starts in ${minutes}:${seconds.toString().padStart(2, '0')}`);
-      } catch (err) {
-        clearInterval(interval);
-        if (currentScrim) currentScrim.timerInterval = null;
-        console.warn('⚠️ Timer stopped (message deleted):', err.message);
+      // 🔴 LEAVE
+      if (interaction.customId === 'leave') {
+        scrim.teams = scrim.teams.filter(t => t.userId !== interaction.user.id);
+        updateEmbed(scrim);
+        const member = interaction.guild.members.cache.get(interaction.user.id);
+        if (member && member.roles.cache.has(SCRIM_ROLE_ID)) await member.roles.remove(SCRIM_ROLE_ID).catch(()=>{});
+        return interaction.reply({ content: '❌ You left the scrim', ephemeral: true });
       }
-    }, 30000);
 
-    // Store so it can be cleared on end
-    currentScrim.timerInterval = interval;
-
-    // Update main embed (no room details shown here)
-    updateEmbed();
-
-    return interaction.reply({
-      content: '✅ Room details posted successfully!',
-      ephemeral: true
-    });
-  }
-
-  // 🏆 RESULT BUTTON → OPEN MODAL
-  if (interaction.isButton() && interaction.customId === 'result') {
-
-    // 🔥 PERMISSION CHECK: Only the host or Admin can submit results!
-    if (interaction.user.id !== currentScrim.hostId && !interaction.member.permissions.has('Administrator')) {
-      return interaction.reply({ 
-        content: '❌ Only the match host or an Admin can submit results!', 
-        ephemeral: true 
-      });
-    }
-
-    const modal = new ModalBuilder()
-      .setCustomId('result_modal')
-      .setTitle('Submit Match Result');
-
-    const teamInput = new TextInputBuilder()
-      .setCustomId('team_name')
-      .setLabel('Team Name')
-      .setStyle(TextInputStyle.Short)
-      .setRequired(true);
-
-    const posInput = new TextInputBuilder()
-      .setCustomId('position')
-      .setLabel('Position (1-25)')
-      .setStyle(TextInputStyle.Short)
-      .setRequired(true);
-
-    const killInput = new TextInputBuilder()
-      .setCustomId('kills')
-      .setLabel('Kills')
-      .setStyle(TextInputStyle.Short)
-      .setRequired(true);
-
-    modal.addComponents(
-      new ActionRowBuilder().addComponents(teamInput),
-      new ActionRowBuilder().addComponents(posInput),
-      new ActionRowBuilder().addComponents(killInput)
-    );
-
-    return interaction.showModal(modal);
-  }
-
-  // 🏆 RESULT MODAL SUBMIT
-  if (interaction.isModalSubmit() && interaction.customId === 'result_modal') {
-
-    const team = interaction.fields.getTextInputValue('team_name');
-    const position = parseInt(interaction.fields.getTextInputValue('position'));
-    const kills = parseInt(interaction.fields.getTextInputValue('kills'));
-
-    // 🎯 Simple Points System
-    let points = 0;
-
-    if (position === 1) points = 15;
-    else if (position === 2) points = 12;
-    else if (position === 3) points = 10;
-    else if (position <= 5) points = 8;
-    else if (position <= 10) points = 5;
-
-    points += kills; // kill points
-
-    if (!currentScrim.results) currentScrim.results = [];
-
-    currentScrim.results.push({ team, position, kills, points });
-
-    return interaction.reply({
-      content: `✅ Result submitted for **${team}** (Points: ${points})`,
-      ephemeral: true
-    });
-  }
-
-  // 🧾 MODAL SUBMIT (TEAM NAME)
-  if (interaction.isModalSubmit() && interaction.customId === 'team_modal') {
-
-    const teamName = interaction.fields.getTextInputValue('team_name');
-
-    if (currentScrim.teams.length >= currentScrim.maxSlots) {
-      return interaction.reply({ content: '❌ Slots full!', ephemeral: true });
-    }
-
-    if (currentScrim.teams.find(t => t.userId === interaction.user.id)) {
-      return interaction.reply({ content: '❌ You already joined!', ephemeral: true });
-    }
-
-    currentScrim.teams.push({
-      name: teamName,
-      userId: interaction.user.id
-    });
-
-    // ✅ GIVE ROLE
-    try {
-      const member = interaction.guild.members.cache.get(interaction.user.id);
-      if (member && !member.roles.cache.has(SCRIM_ROLE_ID)) {
-        await member.roles.add(SCRIM_ROLE_ID);
+      // 🔒 LOCK
+      if (interaction.customId === 'lock') {
+        if (interaction.user.id !== scrim.hostId && !interaction.member.permissions.has('Administrator')) return interaction.reply({ content: '❌ Only host can lock!', ephemeral: true });
+        const modal = new ModalBuilder().setCustomId(`room_modal_${interaction.message.id}`).setTitle('Enter Room Details');
+        modal.addComponents(
+          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('room_id').setLabel('Room ID').setStyle(TextInputStyle.Short).setRequired(true)),
+          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('room_pass').setLabel('Password').setStyle(TextInputStyle.Short).setRequired(true)),
+          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('channel_id').setLabel('Channel ID').setStyle(TextInputStyle.Short).setRequired(true))
+        );
+        return interaction.showModal(modal);
       }
-    } catch (err) {
-      console.warn('⚠️ Could not assign role:', err.message);
+
+      // 🛑 END
+      if (interaction.customId === 'end') {
+        if (interaction.user.id !== scrim.hostId && !interaction.member.permissions.has('Administrator')) return interaction.reply({ content: '❌ Only host can end!', ephemeral: true });
+        const modal = new ModalBuilder().setCustomId(`end_modal_${interaction.message.id}`).setTitle('End Scrim');
+        modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('results_channel_id').setLabel('Channel ID for results').setStyle(TextInputStyle.Short).setRequired(true)));
+        return interaction.showModal(modal);
+      }
+
+      // 🏆 RESULT
+      if (interaction.customId === 'result') {
+        if (interaction.user.id !== scrim.hostId && !interaction.member.permissions.has('Administrator')) return interaction.reply({ content: '❌ Only host can submit results!', ephemeral: true });
+        const modal = new ModalBuilder().setCustomId(`result_modal_${interaction.message.id}`).setTitle('Submit Result');
+        modal.addComponents(
+          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('team_name').setLabel('Team Name').setStyle(TextInputStyle.Short).setRequired(true)),
+          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('position').setLabel('Position (1-25)').setStyle(TextInputStyle.Short).setRequired(true)),
+          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('kills').setLabel('Kills').setStyle(TextInputStyle.Short).setRequired(true))
+        );
+        return interaction.showModal(modal);
+      }
     }
 
-    updateEmbed();
+    // ==========================================
+    // 🔥 SCRIM SPECIFIC MODAL LOGIC
+    // ==========================================
 
-    return interaction.reply({
-      content: `✅ **${teamName}** joined the scrim!`,
-      ephemeral: true
-    });
-  }
+    if (interaction.isModalSubmit()) {
+      // Extract the original message ID attached to the customId
+      const parts = interaction.customId.split('_');
+      if (parts.length < 3) return; // Not a scrim modal
+      
+      const modalType = `${parts[0]}_${parts[1]}`; // e.g. "team_modal"
+      const msgId = parts[2];
+      const scrim = activeScrims.get(msgId);
+
+      if (!scrim && modalType !== 'announce_modal') {
+        return interaction.reply({ content: '❌ This scrim is no longer active!', ephemeral: true });
+      }
+
+      // 🧾 JOIN TEAM SUBMIT
+      if (modalType === 'team_modal') {
+        const teamName = interaction.fields.getTextInputValue('team_name');
+        if (scrim.teams.length >= scrim.maxSlots) return interaction.reply({ content: '❌ Slots full!', ephemeral: true });
+        if (scrim.teams.find(t => t.userId === interaction.user.id)) return interaction.reply({ content: '❌ You already joined!', ephemeral: true });
+
+        scrim.teams.push({ name: teamName, userId: interaction.user.id });
+        const member = interaction.guild.members.cache.get(interaction.user.id);
+        if (member && !member.roles.cache.has(SCRIM_ROLE_ID)) await member.roles.add(SCRIM_ROLE_ID).catch(()=>{});
+
+        updateEmbed(scrim);
+        return interaction.reply({ content: `✅ **${teamName}** joined!`, ephemeral: true });
+      }
+
+      // 🔒 ROOM DETAILS SUBMIT
+      if (modalType === 'room_modal') {
+        const roomId = interaction.fields.getTextInputValue('room_id');
+        const password = interaction.fields.getTextInputValue('room_pass');
+        const targetChannel = interaction.guild.channels.cache.get(interaction.fields.getTextInputValue('channel_id'));
+        if (!targetChannel) return interaction.reply({ content: '❌ Invalid channel ID!', ephemeral: true });
+
+        scrim.locked = true;
+        scrim.roomId = roomId;
+        scrim.password = password;
+
+        const roomEmbed = new EmbedBuilder().setTitle('🏠 SCRIM ROOM DETAILS').setColor('Orange').addFields({ name: '🏠 Room ID', value: roomId }, { name: '🔑 Password', value: password });
+        scrim.roomMessage = await targetChannel.send({ content: `<@&${SCRIM_ROLE_ID}>`, embeds: [roomEmbed] });
+
+        let timeLeft = 300;
+        const timerMessage = await targetChannel.send(`⏱️ Match starts in 5:00`);
+        scrim.timerInterval = setInterval(async () => {
+          timeLeft -= 30;
+          if (timeLeft <= 0) {
+            clearInterval(scrim.timerInterval);
+            scrim.timerInterval = null;
+            targetChannel.send('🚀 Match Started!').catch(()=>{});
+            return;
+          }
+          const min = Math.floor(timeLeft / 60);
+          const sec = timeLeft % 60;
+          timerMessage.edit(`⏱️ Match starts in ${min}:${sec.toString().padStart(2, '0')}`).catch(() => clearInterval(scrim.timerInterval));
+        }, 30000);
+
+        updateEmbed(scrim);
+        return interaction.reply({ content: '✅ Room details posted!', ephemeral: true });
+      }
+
+      // 🏆 RESULT SUBMIT
+      if (modalType === 'result_modal') {
+        const team = interaction.fields.getTextInputValue('team_name');
+        const pos = parseInt(interaction.fields.getTextInputValue('position'));
+        const kills = parseInt(interaction.fields.getTextInputValue('kills'));
+
+        let points = kills;
+        if (pos === 1) points += 15; else if (pos === 2) points += 12; else if (pos === 3) points += 10; else if (pos <= 5) points += 8; else if (pos <= 10) points += 5;
+
+        scrim.results.push({ team, position: pos, kills, points });
+        return interaction.reply({ content: `✅ Result saved: **${team}** (${points} pts)`, ephemeral: true });
+      }
+
+      // 🛑 END SCRIM SUBMIT
+      if (modalType === 'end_modal') {
+        const resultsChannel = interaction.guild.channels.cache.get(interaction.fields.getTextInputValue('results_channel_id'));
+        if (!resultsChannel) return interaction.reply({ content: '❌ Invalid channel ID!', ephemeral: true });
+
+        // Post Results
+        if (scrim.results.length > 0) {
+          const sorted = [...scrim.results].sort((a, b) => b.points - a.points);
+          const resultText = sorted.map((r, i) => `${i + 1}. ${r.team} | ${r.points} pts (Pos: ${r.position} | ${r.kills} K)`).join('\n');
+          await resultsChannel.send({ embeds: [new EmbedBuilder().setTitle(`🏆 MATCH #${scrim.matchId} RESULTS`).setDescription(resultText).setColor('Gold')] });
+        }
+
+        // Post Transcript
+        const logChannel = interaction.guild.channels.cache.get(LOG_CHANNEL_ID);
+        if (logChannel) {
+          const teamList = scrim.teams.length ? scrim.teams.map((t, i) => `${i + 1}. ${t.name}`).join('\n') : 'No teams';
+          logChannel.send({ embeds: [new EmbedBuilder().setTitle(`📋 TRANSCRIPT #${scrim.matchId}`).setColor('Orange').addFields({ name: '👑 Host', value: scrim.hostName }, { name: '📋 Team List', value: teamList })] });
+        }
+
+        // Cleanup
+        for (const team of scrim.teams) {
+          const member = interaction.guild.members.cache.get(team.userId);
+          if (member && member.roles.cache.has(SCRIM_ROLE_ID)) await member.roles.remove(SCRIM_ROLE_ID).catch(()=>{});
+        }
+        if (scrim.timerInterval) clearInterval(scrim.timerInterval);
+        if (scrim.roomMessage) scrim.roomMessage.delete().catch(()=>{});
+        scrim.message.delete().catch(()=>{});
+
+        // Save & Delete from active map
+        await Match.create({ matchId: scrim.matchId, host: scrim.hostName, teams: scrim.teams, results: scrim.results });
+        activeScrims.delete(msgId);
+
+        return interaction.reply({ content: '✅ Scrim ended, saved, and cleaned up!', ephemeral: true });
+      }
+    }
 
   } catch (err) {
-    if (err.code === 10062) {
-      console.warn('⚠️ Interaction expired (ignored):', err.message);
-    } else {
-      console.error('⚠️ Interaction error:', err.message);
-    }
+    if (err.code !== 10062) console.error('⚠️ Interaction error:', err.message);
   }
 });
 
-// 🔄 UPDATE EMBED FUNCTION
-function updateEmbed
+// 🔄 DYNAMIC EMBED UPDATER
+function updateEmbed(scrim) {
+  const embed = new EmbedBuilder()
+    .setTitle(`🔥 SAFFRON SCRIM BOT - MATCH #${scrim.matchId}`)
+    .setColor('Orange')
+    .addFields(
+      { name: '👑 Host', value: scrim.hostName },
+      { name: '🎮 Slots', value: `${scrim.teams.length}/25` },
+      { name: '📋 Teams', value: scrim.teams.length ? scrim.teams.map((t, i) => `${i + 1}. ${t.name}`).join('\n') : 'No teams yet' }
+    );
+
+  scrim.message.edit({ embeds: [embed] }).catch(()=>{});
+}
+
+client.login(process.env.DISCORD_TOKEN);
