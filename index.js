@@ -21,30 +21,25 @@ const matchSchema = new mongoose.Schema({
 const Match = mongoose.model('Match', matchSchema);
 
 const tourneySchema = new mongoose.Schema({
-  tourneyId: Number, 
-  hostId: String, 
-  hostName: String, 
-  maxTeams: { type: Number, default: 100 }, 
-  teams: Array, 
-  status: { type: String, default: 'registering' }, 
-  createdAt: { type: Date, default: Date.now }
+  tourneyId: Number, hostId: String, hostName: String, maxTeams: { type: Number, default: 100 }, teams: Array, status: { type: String, default: 'registering' }, createdAt: { type: Date, default: Date.now }
 });
 const Tourney = mongoose.model('Tourney', tourneySchema);
 
-// 🔢 COUNTERS
+// 🔢 COUNTERS (FORCE INITIALIZED)
 let matchCounter = 0;
 let tourneyCounter = 0;
 
 async function loadCounters() {
   try {
     const lastMatch = await Match.findOne().sort({ matchId: -1 });
-    matchCounter = lastMatch ? lastMatch.matchId : 0;
+    matchCounter = (lastMatch && !isNaN(lastMatch.matchId)) ? lastMatch.matchId : 0;
 
     const lastTourney = await Tourney.findOne().sort({ tourneyId: -1 });
-    tourneyCounter = lastTourney ? lastTourney.tourneyId : 0;
+    tourneyCounter = (lastTourney && !isNaN(lastTourney.tourneyId)) ? lastTourney.tourneyId : 0;
     
-    console.log(`✅ Counters Fixed -> Scrims: ${matchCounter}, Tourneys: ${tourneyCounter}`);
+    console.log(`✅ DATABASE SYNC -> Scrims: ${matchCounter}, Tourneys: ${tourneyCounter}`);
   } catch (err) {
+    console.error('❌ Counter Load Failed:', err);
     matchCounter = 0;
     tourneyCounter = 0;
   }
@@ -55,18 +50,13 @@ async function connectDB() {
     await mongoose.connect(process.env.MONGODB_URI); 
     console.log('✅ Connected to MongoDB'); 
     await loadCounters();
-  } catch (err) { 
-    console.error('⚠️ MongoDB connection failed:', err.message); 
-  }
+  } catch (err) { console.error('⚠️ DB Error:', err.message); }
 }
 
-// ==========================================
-// ⚙️ CONSTANTS & IDS 
-// ==========================================
+// ⚙️ IDS
 const SCRIM_ROLE_ID = "1488611595318988850";
 const LOG_CHANNEL_ID = "1489298280960622805";
 const HOST_ROLE_ID = "1488613066470981673";
-
 const ROLE_GROUP_A = "1492126223298596864";
 const ROLE_GROUP_B = "1492126277199728741";
 const ROLE_GROUP_C = "1492126324930641950";
@@ -76,23 +66,9 @@ const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBit
 const activeScrims = new Map(); 
 const activeTourneys = new Map();
 
-client.once('ready', () => {
-  connectDB();
-  console.log(`✅ Logged in as ${client.user.tag}`);
-});
+client.once('ready', () => { connectDB(); console.log(`✅ Bot Live: ${client.user.tag}`); });
 
-async function sendLog(guild, title, description, color = 'Grey') {
-  try {
-    const logChannel = await guild.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
-    if (!logChannel) return;
-    const logEmbed = new EmbedBuilder().setTitle(`LOG: ${title}`).setDescription(description).setColor(color).setTimestamp();
-    await logChannel.send({ embeds: [logEmbed] });
-  } catch (err) {}
-}
-
-// ==========================================
-// 🎮 MESSAGE COMMANDS
-// ==========================================
+// 🎮 COMMANDS
 client.on('messageCreate', async (message) => {
   if (message.author.bot || !message.content.startsWith('!')) return;
   const args = message.content.slice(1).trim().split(/ +/);
@@ -102,121 +78,85 @@ client.on('messageCreate', async (message) => {
   if (!isStaff) return;
 
   if (cmd === 'createtourney') {
+    // 🛡️ NaN PROTECTION
+    if (isNaN(tourneyCounter)) tourneyCounter = 0;
     tourneyCounter++;
-    const tourneyId = tourneyCounter; 
-    const newTourney = { tourneyId, hostId: message.author.id, hostName: message.author.username, teams: [], maxTeams: 100, status: 'registering', message: null };
+    
+    const tid = tourneyCounter;
+    const newTourney = { tourneyId: tid, hostId: message.author.id, hostName: message.author.username, teams: [], maxTeams: 100, status: 'registering', message: null };
     
     const embed = new EmbedBuilder()
-        .setTitle(`🏆 TOURNAMENT REGISTRATION #${tourneyId}`)
-        .setDescription(`Click Register to join or Leave to remove your team.`)
+        .setTitle(`🏆 TOURNAMENT REGISTRATION #${tid}`)
+        .setDescription(`Register your team below. Use the Leave button if you need to exit.`)
         .addFields({ name: '📊 Registered Teams', value: '0/100' })
         .setColor('Purple');
 
     const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('tourney_join').setLabel('Register Team').setStyle(ButtonStyle.Success),
-        new ButtonBuilder().setCustomId('tourney_leave').setLabel('Leave').setStyle(ButtonStyle.Secondary), // 🔥 Added Leave Button
-        new ButtonBuilder().setCustomId('tourney_close').setLabel('Close & Group').setStyle(ButtonStyle.Danger)
+        new ButtonBuilder().setCustomId('t_join').setLabel('Register').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId('t_leave').setLabel('Leave').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('t_close').setLabel('Close').setStyle(ButtonStyle.Danger)
     );
 
-    const panelMsg = await message.channel.send({ embeds: [embed], components: [row] });
-    newTourney.message = panelMsg;
-    activeTourneys.set(panelMsg.id, newTourney);
-    sendLog(message.guild, 'Tournament Started', `🏆 Registration opened for **Tournament #${tourneyId}**`, 'Purple');
+    const msg = await message.channel.send({ embeds: [embed], components: [row] });
+    newTourney.message = msg;
+    activeTourneys.set(msg.id, newTourney);
   }
-
-  // (Other commands !createscrim etc stay the same)
 });
 
-// ==========================================
-// ⚡ INTERACTION HANDLER
-// ==========================================
+// ⚡ ACTIONS
 client.on('interactionCreate', async (interaction) => {
     try {
-      const isStaff = interaction.member?.permissions.has('Administrator') || interaction.member?.roles.cache.has(HOST_ROLE_ID);
-  
-      if (interaction.isButton()) {
-          const tourney = activeTourneys.get(interaction.message.id);
-  
-          if (interaction.customId === 'tourney_join' && tourney) {
-              if (tourney.teams.some(t => t.userId === interaction.user.id)) return interaction.reply({ content: '❌ You are already registered!', ephemeral: true });
-              const modal = new ModalBuilder().setCustomId(`tmodal_${interaction.message.id}`).setTitle(`Register Team`);
-              modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('t_name').setLabel('Team Name').setStyle(TextInputStyle.Short).setRequired(true)));
-              return interaction.showModal(modal);
-          }
+      const tourney = activeTourneys.get(interaction.message.id);
+      if (!tourney && interaction.isButton()) return interaction.reply({ content: '❌ Tournament Expired.', ephemeral: true });
 
-          // 🔥 TOURNAMENT LEAVE LOGIC
-          if (interaction.customId === 'tourney_leave' && tourney) {
-              const teamIndex = tourney.teams.findIndex(t => t.userId === interaction.user.id);
-              if (teamIndex === -1) return interaction.reply({ content: '❌ You are not registered for this tournament!', ephemeral: true });
-
-              const removedTeam = tourney.teams.splice(teamIndex, 1)[0];
-
-              const updatedEmbed = EmbedBuilder.from(tourney.message.embeds[0]).setFields({ name: '📊 Registered Teams', value: `${tourney.teams.length}/${tourney.maxTeams}` });
-              await tourney.message.edit({ embeds: [updatedEmbed] });
-
-              sendLog(interaction.guild, 'Tourney Leave', `👤 **${interaction.user.tag}** removed team **${removedTeam.name}** from Tourney #${tourney.tourneyId}`, 'Orange');
-              return interaction.reply({ content: `✅ Your team **${removedTeam.name}** has been removed.`, ephemeral: true });
-          }
-  
-          if (interaction.customId === 'tourney_close' && tourney) {
-              if (!isStaff) return interaction.reply({ content: '❌ Staff Only!', ephemeral: true });
-              if (tourney.teams.length === 0) return interaction.reply({ content: '❌ No teams joined.', ephemeral: true });
-
-              await interaction.reply({ content: '⏳ Closing & Shuffling...', ephemeral: false });
-  
-              const shuffled = [...tourney.teams].sort(() => Math.random() - 0.5);
-              const groupNames = ['A', 'B', 'C', 'D'];
-              const roleMapping = { A: ROLE_GROUP_A, B: ROLE_GROUP_B, C: ROLE_GROUP_C, D: ROLE_GROUP_D };
-              const groupLists = { A: [], B: [], C: [], D: [] };
-  
-              for (let i = 0; i < shuffled.length; i++) {
-                const groupLetter = groupNames[i % 4]; 
-                shuffled[i].group = groupLetter;
-                groupLists[groupLetter].push(shuffled[i].name);
-              }
-  
-              const finalEmbed = new EmbedBuilder()
-                .setTitle(`🏆 GROUPS FOR TOURNAMENT #${tourney.tourneyId}`)
-                .setColor('Gold')
-                .addFields(
-                    { name: '📘 Group A', value: groupLists.A.join('\n') || 'None', inline: true },
-                    { name: '📕 Group B', value: groupLists.B.join('\n') || 'None', inline: true },
-                    { name: '\u200B', value: '\u200B' },
-                    { name: '📗 Group C', value: groupLists.C.join('\n') || 'None', inline: true },
-                    { name: '📒 Group D', value: groupLists.D.join('\n') || 'None', inline: true }
-                );
-  
-              await interaction.channel.send({ embeds: [finalEmbed] });
-              if (tourney.message) await tourney.message.edit({ components: [] }).catch(()=>{});
-              
-              // Roles assigned in background
-              for (const team of shuffled) {
-                  const roleId = roleMapping[team.group];
-                  const member = await interaction.guild.members.fetch(team.userId).catch(() => null);
-                  if (member && roleId) await member.roles.add(roleId).catch(() => {});
-              }
-
-              await Tourney.create({ tourneyId: tourney.tourneyId, hostId: tourney.hostId, hostName: tourney.hostName, teams: shuffled, status: 'grouped' });
-              activeTourneys.delete(interaction.message.id);
-              return interaction.editReply({ content: '✅ Tournament Closed!' });
-          }
+      if (interaction.customId === 't_join') {
+          if (tourney.teams.some(t => t.userId === interaction.user.id)) return interaction.reply({ content: '❌ Already in!', ephemeral: true });
+          const modal = new ModalBuilder().setCustomId(`tmod_${interaction.message.id}`).setTitle('Join Tournament');
+          modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('n').setLabel('Team Name').setStyle(TextInputStyle.Short).setRequired(true)));
+          return interaction.showModal(modal);
       }
-  
-      if (interaction.isModalSubmit()) {
-          if (interaction.customId.startsWith('tmodal_')) {
-              const msgId = interaction.customId.split('_')[1];
-              const tourney = activeTourneys.get(msgId);
-              if (!tourney) return interaction.reply({ content: '❌ Expired.', ephemeral: true });
-  
-              const teamName = interaction.fields.getTextInputValue('t_name');
-              tourney.teams.push({ name: teamName, userId: interaction.user.id });
-  
-              const updatedEmbed = EmbedBuilder.from(tourney.message.embeds[0]).setFields({ name: '📊 Registered Teams', value: `${tourney.teams.length}/${tourney.maxTeams}` });
-              await tourney.message.edit({ embeds: [updatedEmbed] });
-              return interaction.reply({ content: `✅ Registered!`, ephemeral: true });
-          }
+
+      if (interaction.customId === 't_leave') {
+          const idx = tourney.teams.findIndex(t => t.userId === interaction.user.id);
+          if (idx === -1) return interaction.reply({ content: '❌ You are not in this tournament!', ephemeral: true });
+          tourney.teams.splice(idx, 1);
+          const emb = EmbedBuilder.from(interaction.message.embeds[0]).setFields({ name: '📊 Registered Teams', value: `${tourney.teams.length}/100` });
+          await interaction.message.edit({ embeds: [emb] });
+          return interaction.reply({ content: '✅ You have left the tournament.', ephemeral: true });
       }
-    } catch (err) { console.error(err); }
+
+      if (interaction.customId === 't_close') {
+          const isStaff = interaction.member.permissions.has('Administrator') || interaction.member.roles.cache.has(HOST_ROLE_ID);
+          if (!isStaff) return interaction.reply({ content: '❌ Staff only!', ephemeral: true });
+          
+          await interaction.reply({ content: '⏳ Shuffling...' });
+          const shuffled = [...tourney.teams].sort(() => Math.random() - 0.5);
+          const groups = { A: [], B: [], C: [], D: [] };
+          const names = ['A', 'B', 'C', 'D'];
+
+          shuffled.forEach((t, i) => groups[names[i % 4]].push(t.name));
+
+          const res = new EmbedBuilder().setTitle(`🏆 GROUPS FOR #${tourney.tourneyId}`).setColor('Gold').addFields(
+              { name: 'A', value: groups.A.join('\n') || 'None', inline: true },
+              { name: 'B', value: groups.B.join('\n') || 'None', inline: true },
+              { name: 'C', value: groups.C.join('\n') || 'None', inline: true },
+              { name: 'D', value: groups.D.join('\n') || 'None', inline: true }
+          );
+
+          await interaction.channel.send({ embeds: [res] });
+          await interaction.message.edit({ components: [] });
+          activeTourneys.delete(interaction.message.id);
+          return interaction.editReply('✅ Done!');
+      }
+
+      if (interaction.isModalSubmit() && interaction.customId.startsWith('tmod_')) {
+          const name = interaction.fields.getTextInputValue('n');
+          tourney.teams.push({ name, userId: interaction.user.id });
+          const emb = EmbedBuilder.from(tourney.message.embeds[0]).setFields({ name: '📊 Registered Teams', value: `${tourney.teams.length}/100` });
+          await tourney.message.edit({ embeds: [emb] });
+          return interaction.reply({ content: `✅ Registered as ${name}`, ephemeral: true });
+      }
+    } catch (e) { console.error(e); }
 });
 
 client.login(process.env.DISCORD_TOKEN);
