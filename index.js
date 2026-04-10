@@ -243,6 +243,42 @@ client.on('interactionCreate', async (interaction) => {
       return interaction.reply({ content: '✅ Announcement sent!', ephemeral: true });
     }
 
+    // 🆔 SUBMIT ID/PASS MODAL
+    if (interaction.isModalSubmit() && interaction.customId === 'idp_submit_modal') {
+      const roomId = interaction.fields.getTextInputValue('room_id');
+      const password = interaction.fields.getTextInputValue('room_pass');
+      const targetChannel = interaction.guild.channels.cache.get(interaction.fields.getTextInputValue('channel_id'));
+
+      if (!targetChannel) return interaction.reply({ content: '❌ Invalid channel ID!', ephemeral: true });
+
+      const embed = new EmbedBuilder()
+        .setTitle('🏠 CUSTOM ROOM DETAILS')
+        .setColor('Green')
+        .addFields(
+          { name: '🆔 Room ID', value: roomId },
+          { name: '🔑 Password', value: password }
+        )
+        .setTimestamp();
+
+      await targetChannel.send({ embeds: [embed] });
+      return interaction.reply({ content: '✅ ID and Password sent to the channel!', ephemeral: true });
+    }
+
+    // 🆔 OPEN ID/PASS MODAL
+    if (interaction.isButton() && interaction.customId === 'open_idp') {
+      if (!interaction.member.permissions.has('Administrator')) return interaction.reply({ content: '❌ No permission', ephemeral: true });
+
+      const modal = new ModalBuilder().setCustomId('idp_submit_modal').setTitle('Send Room ID & Password');
+
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('room_id').setLabel('Room ID').setStyle(TextInputStyle.Short).setRequired(true)),
+        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('room_pass').setLabel('Password').setStyle(TextInputStyle.Short).setRequired(true)),
+        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('channel_id').setLabel('Target Channel ID').setStyle(TextInputStyle.Short).setRequired(true))
+      );
+      
+      return interaction.showModal(modal);
+    }
+
     // ----------------------------------------
     // 🔥 TOURNAMENT BUTTONS
     // ----------------------------------------
