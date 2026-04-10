@@ -56,6 +56,9 @@ async function connectDB() {
 const SCRIM_ROLE_ID = "1488611595318988850";
 const LOG_CHANNEL_ID = "1489298280960622805";
 
+// 🔥 ADMIN / HOST SECURITY ROLE
+const HOST_ROLE_ID = "1488613066470981673";
+
 // 🔥 TOURNAMENT GROUP ROLES
 const ROLE_GROUP_A = "1492126223298596864";
 const ROLE_GROUP_B = "1492126277199728741";
@@ -91,10 +94,20 @@ client.on('messageCreate', async (message) => {
   const args = message.content.slice(1).trim().split(/ +/);
   const cmd = args.shift().toLowerCase();
 
+  // 🔥 UNIVERSAL SECURITY GATEKEEPER
+  // If they aren't an Admin AND don't have the Host Role, ignore them!
+  const isServerAdmin = message.member.permissions.has('Administrator');
+  const hasHostRole = message.member.roles.cache.has(HOST_ROLE_ID);
+
+  if (!isServerAdmin && !hasHostRole) {
+    // We send an ephemeral-style quick delete message so it doesn't clutter chat
+    const reply = await message.reply('❌ You do not have the required Host role to use this bot.');
+    setTimeout(() => reply.delete().catch(()=>{}), 5000);
+    return;
+  }
+
   // 🆘 HELP COMMAND
   if (cmd === 'help') {
-    if (!message.member.permissions.has('Administrator')) return message.reply('❌ Only Admins can view the command list.');
-
     const embed = new EmbedBuilder()
       .setTitle('🤖 Saffron Bot - Admin Control Panel')
       .setDescription('Here are all the commands you can use to manage your server:')
@@ -161,14 +174,11 @@ client.on('messageCreate', async (message) => {
   }
 
   if (cmd === 'announce') {
-    if (!message.member.permissions.has('Administrator')) return message.reply('❌ Only Admins can use this.');
     const button = new ButtonBuilder().setCustomId('open_announce').setLabel('Create Announcement').setStyle(ButtonStyle.Primary);
     return message.reply({ content: 'Click button to create announcement', components: [new ActionRowBuilder().addComponents(button)] });
   }
 
-  // 🆔 ID/PASS COMMAND
   if (cmd === 'idp') {
-    if (!message.member.permissions.has('Administrator')) return message.reply('❌ Only Admins can use this.');
     const button = new ButtonBuilder().setCustomId('open_idp').setLabel('Enter ID & Password').setStyle(ButtonStyle.Success);
     return message.reply({ content: 'Click the button below to open the ID/Pass form:', components: [new ActionRowBuilder().addComponents(button)] });
   }
@@ -211,8 +221,6 @@ client.on('messageCreate', async (message) => {
   // 🏆 TOURNAMENT COMMANDS 
   // ----------------------------------------
   if (cmd === 'createtourney') {
-    if (!message.member.permissions.has('Administrator')) return message.reply('❌ Only Admins can create tournaments.');
-
     const tourneyId = `T-${Date.now().toString().slice(-6)}`;
     const newTourney = {
       tourneyId: tourneyId,
@@ -245,9 +253,15 @@ client.on('messageCreate', async (message) => {
 // ==========================================
 client.on('interactionCreate', async (interaction) => {
   try {
+    
+    // Check if the user interacting has Admin or Host role
+    const isServerAdmin = interaction.member?.permissions.has('Administrator');
+    const hasHostRole = interaction.member?.roles.cache.has(HOST_ROLE_ID);
+    const isStaff = isServerAdmin || hasHostRole;
+
     // 📢 ANNOUNCEMENT LOGIC
     if (interaction.isButton() && interaction.customId === 'open_announce') {
-      if (!interaction.member.permissions.has('Administrator')) return interaction.reply({ content: '❌ No permission', ephemeral: true });
+      if (!isStaff) return interaction.reply({ content: '❌ No permission', ephemeral: true });
       const modal = new ModalBuilder().setCustomId('announce_modal').setTitle('Send Announcement');
       modal.addComponents(
         new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('announce_msg').setLabel('Message').setStyle(TextInputStyle.Paragraph).setRequired(true)),
@@ -258,7 +272,7 @@ client.on('interactionCreate', async (interaction) => {
 
     // 🆔 OPEN ID/PASS MODAL
     if (interaction.isButton() && interaction.customId === 'open_idp') {
-      if (!interaction.member.permissions.has('Administrator')) return interaction.reply({ content: '❌ No permission', ephemeral: true });
+      if (!isStaff) return interaction.reply({ content: '❌ No permission', ephemeral: true });
       const modal = new ModalBuilder().setCustomId('idp_submit_modal').setTitle('Send Room ID & Password');
       modal.addComponents(
         new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('room_id').setLabel('Room ID').setStyle(TextInputStyle.Short).setRequired(true)),
@@ -275,7 +289,7 @@ client.on('interactionCreate', async (interaction) => {
       const tourney = activeTourneys.get(interaction.message.id);
       if (!tourney) return interaction.reply({ content: '❌ Tournament data not found or already closed!', ephemeral: true });
 
-      // 🟢 REGISTER TEAM
+      // 🟢 REGISTER TEAM (Open to anyone)
       if (interaction.customId === 'tourney_join') {
         if (tourney.status !== 'registering') return interaction.reply({ content: '❌ Registration is closed!', ephemeral: true });
         if (tourney.teams.length >= tourney.maxTeams) return interaction.reply({ content: '❌ Tournament is full (100/100)!', ephemeral: true });
@@ -286,17 +300,10 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.showModal(modal);
       }
 
-      // 🔴 CLOSE & DISTRIBUTE 
+      // 🔴 CLOSE & DISTRIBUTE (Staff Only)
       if (interaction.customId === 'tourney_close') {
-        
-        const isHost = interaction.user.id === tourney.hostId;
-        const isAdmin = interaction.member.permissions.has('Administrator');
-        
-        if (!isHost && !isAdmin) {
-          return interaction.reply({ 
-            content: '❌ Nice try! Only the Tournament Host or a Server Admin can close registration.', 
-            ephemeral: true 
-          });
+        if (interaction.user.id !== tourney.hostId && !isStaff) {
+          return interaction.reply({ content: '❌ Nice try! Only the Host or Staff can close registration.', ephemeral: true });
         }
 
         if (tourney.teams.length === 0) return interaction.reply({ content: '❌ No teams registered yet!', ephemeral: true });
@@ -304,20 +311,17 @@ client.on('interactionCreate', async (interaction) => {
         tourney.status = 'closed';
         await interaction.reply({ content: '⏳ Closing registration, shuffling teams, and assigning roles... This might take a minute.', ephemeral: false });
 
-        // Shuffle teams randomly
         const shuffled = [...tourney.teams].sort(() => Math.random() - 0.5);
         
         const groupNames = ['A', 'B', 'C', 'D'];
         const roleMapping = { A: ROLE_GROUP_A, B: ROLE_GROUP_B, C: ROLE_GROUP_C, D: ROLE_GROUP_D };
         const groupLists = { A: [], B: [], C: [], D: [] };
 
-        // Round-robin distribution
         for (let i = 0; i < shuffled.length; i++) {
           const groupLetter = groupNames[i % 4]; 
           shuffled[i].group = groupLetter;
           groupLists[groupLetter].push(shuffled[i].name);
 
-          // Give the specific role to the user 
           try {
             const member = await interaction.guild.members.fetch(shuffled[i].userId);
             if (member && roleMapping[groupLetter]) {
@@ -328,26 +332,24 @@ client.on('interactionCreate', async (interaction) => {
           }
         }
 
-        // Save to Database
         tourney.teams = shuffled;
         await Tourney.create({ tourneyId: tourney.tourneyId, hostId: tourney.hostId, teams: tourney.teams, status: 'grouped' });
 
-        // Print final groups
         const finalEmbed = new EmbedBuilder()
           .setTitle(`🏆 TOURNAMENT GROUPS: ${tourney.tourneyId}`)
           .setColor('Gold')
           .addFields(
             { name: '📘 Group A', value: groupLists.A.join('\n') || 'None', inline: true },
             { name: '📕 Group B', value: groupLists.B.join('\n') || 'None', inline: true },
-            { name: '\u200B', value: '\u200B' }, // Empty line break
+            { name: '\u200B', value: '\u200B' }, 
             { name: '📗 Group C', value: groupLists.C.join('\n') || 'None', inline: true },
             { name: '📒 Group D', value: groupLists.D.join('\n') || 'None', inline: true }
           );
 
         await interaction.channel.send({ content: `✅ **Groups have been generated and roles assigned!**`, embeds: [finalEmbed] });
         
-        tourney.message.edit({ components: [] }).catch(()=>{}); // Remove buttons
-        activeTourneys.delete(interaction.message.id); // Clear from active memory
+        tourney.message.edit({ components: [] }).catch(()=>{}); 
+        activeTourneys.delete(interaction.message.id); 
       }
     }
 
@@ -358,6 +360,7 @@ client.on('interactionCreate', async (interaction) => {
       const scrim = activeScrims.get(interaction.message.id);
       if (!scrim) return interaction.reply({ content: '❌ This scrim is no longer active!', ephemeral: true });
 
+      // Join/Leave is open to players
       if (interaction.customId === 'join') {
         if (scrim.locked) return interaction.reply({ content: '❌ Scrim is locked!', ephemeral: true });
         const modal = new ModalBuilder().setCustomId(`team_modal_${interaction.message.id}`).setTitle('Enter Team Name');
@@ -373,25 +376,29 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.reply({ content: '❌ You left the scrim', ephemeral: true });
       }
 
-      if (interaction.customId === 'lock') {
-        if (interaction.user.id !== scrim.hostId && !interaction.member.permissions.has('Administrator')) return interaction.reply({ content: '❌ Only host can lock!', ephemeral: true });
-        const modal = new ModalBuilder().setCustomId(`room_modal_${interaction.message.id}`).setTitle('Enter Room Details');
-        modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('room_id').setLabel('Room ID').setStyle(TextInputStyle.Short).setRequired(true)), new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('room_pass').setLabel('Password').setStyle(TextInputStyle.Short).setRequired(true)), new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('channel_id').setLabel('Channel ID').setStyle(TextInputStyle.Short).setRequired(true)));
-        return interaction.showModal(modal);
-      }
+      // Lock/End/Result is STAFF ONLY
+      if (['lock', 'end', 'result'].includes(interaction.customId)) {
+        if (interaction.user.id !== scrim.hostId && !isStaff) {
+          return interaction.reply({ content: '❌ Only the host or Staff can do this!', ephemeral: true });
+        }
 
-      if (interaction.customId === 'end') {
-        if (interaction.user.id !== scrim.hostId && !interaction.member.permissions.has('Administrator')) return interaction.reply({ content: '❌ Only host can end!', ephemeral: true });
-        const modal = new ModalBuilder().setCustomId(`end_modal_${interaction.message.id}`).setTitle('End Scrim');
-        modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('results_channel_id').setLabel('Channel ID for results').setStyle(TextInputStyle.Short).setRequired(true)));
-        return interaction.showModal(modal);
-      }
+        if (interaction.customId === 'lock') {
+          const modal = new ModalBuilder().setCustomId(`room_modal_${interaction.message.id}`).setTitle('Enter Room Details');
+          modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('room_id').setLabel('Room ID').setStyle(TextInputStyle.Short).setRequired(true)), new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('room_pass').setLabel('Password').setStyle(TextInputStyle.Short).setRequired(true)), new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('channel_id').setLabel('Channel ID').setStyle(TextInputStyle.Short).setRequired(true)));
+          return interaction.showModal(modal);
+        }
 
-      if (interaction.customId === 'result') {
-        if (interaction.user.id !== scrim.hostId && !interaction.member.permissions.has('Administrator')) return interaction.reply({ content: '❌ Only host can submit results!', ephemeral: true });
-        const modal = new ModalBuilder().setCustomId(`result_modal_${interaction.message.id}`).setTitle('Submit Result');
-        modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('team_name').setLabel('Team Name').setStyle(TextInputStyle.Short).setRequired(true)), new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('position').setLabel('Position (1-25)').setStyle(TextInputStyle.Short).setRequired(true)), new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('kills').setLabel('Kills').setStyle(TextInputStyle.Short).setRequired(true)));
-        return interaction.showModal(modal);
+        if (interaction.customId === 'end') {
+          const modal = new ModalBuilder().setCustomId(`end_modal_${interaction.message.id}`).setTitle('End Scrim');
+          modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('results_channel_id').setLabel('Channel ID for results').setStyle(TextInputStyle.Short).setRequired(true)));
+          return interaction.showModal(modal);
+        }
+
+        if (interaction.customId === 'result') {
+          const modal = new ModalBuilder().setCustomId(`result_modal_${interaction.message.id}`).setTitle('Submit Result');
+          modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('team_name').setLabel('Team Name').setStyle(TextInputStyle.Short).setRequired(true)), new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('position').setLabel('Position (1-25)').setStyle(TextInputStyle.Short).setRequired(true)), new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('kills').setLabel('Kills').setStyle(TextInputStyle.Short).setRequired(true)));
+          return interaction.showModal(modal);
+        }
       }
     }
 
