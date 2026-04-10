@@ -137,6 +137,21 @@ client.on('messageCreate', async (message) => {
     return message.reply({ content: 'Click button to create announcement', components: [new ActionRowBuilder().addComponents(button)] });
   }
 
+  // 🆔 ID/PASS COMMAND
+  if (cmd === 'idp') {
+    if (!message.member.permissions.has('Administrator')) return message.reply('❌ Only Admins can use this.');
+    
+    const button = new ButtonBuilder()
+      .setCustomId('open_idp')
+      .setLabel('Enter ID & Password')
+      .setStyle(ButtonStyle.Success);
+      
+    return message.reply({ 
+      content: 'Click the button below to open the ID/Pass form:', 
+      components: [new ActionRowBuilder().addComponents(button)] 
+    });
+  }
+
   if (cmd === 'createscrim') {
     matchCounter++;
     const newScrim = {
