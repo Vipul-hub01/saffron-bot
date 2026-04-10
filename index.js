@@ -51,7 +51,7 @@ async function connectDB() {
 }
 
 // ==========================================
-// ⚙️ CONSTANTS & IDS (PASTE YOUR ROLE IDS HERE)
+// ⚙️ CONSTANTS & IDS 
 // ==========================================
 const SCRIM_ROLE_ID = "1488611595318988850";
 const LOG_CHANNEL_ID = "1489298280960622805";
@@ -92,7 +92,7 @@ client.on('messageCreate', async (message) => {
   const cmd = args.shift().toLowerCase();
 
   // ----------------------------------------
-  // SCRIM COMMANDS (Untouched)
+  // SCRIM COMMANDS 
   // ----------------------------------------
   if (cmd === 'history') {
     try {
@@ -133,23 +133,16 @@ client.on('messageCreate', async (message) => {
   }
 
   if (cmd === 'announce') {
+    if (!message.member.permissions.has('Administrator')) return message.reply('❌ Only Admins can use this.');
     const button = new ButtonBuilder().setCustomId('open_announce').setLabel('Create Announcement').setStyle(ButtonStyle.Primary);
     return message.reply({ content: 'Click button to create announcement', components: [new ActionRowBuilder().addComponents(button)] });
   }
 
-  // 🆔 ID/PASS COMMAND
+  // 🆔 ID/PASS COMMAND (NEW)
   if (cmd === 'idp') {
     if (!message.member.permissions.has('Administrator')) return message.reply('❌ Only Admins can use this.');
-    
-    const button = new ButtonBuilder()
-      .setCustomId('open_idp')
-      .setLabel('Enter ID & Password')
-      .setStyle(ButtonStyle.Success);
-      
-    return message.reply({ 
-      content: 'Click the button below to open the ID/Pass form:', 
-      components: [new ActionRowBuilder().addComponents(button)] 
-    });
+    const button = new ButtonBuilder().setCustomId('open_idp').setLabel('Enter ID & Password').setStyle(ButtonStyle.Success);
+    return message.reply({ content: 'Click the button below to open the ID/Pass form:', components: [new ActionRowBuilder().addComponents(button)] });
   }
 
   if (cmd === 'createscrim') {
@@ -187,7 +180,7 @@ client.on('messageCreate', async (message) => {
   }
 
   // ----------------------------------------
-  // 🏆 TOURNAMENT COMMANDS (NEW)
+  // 🏆 TOURNAMENT COMMANDS 
   // ----------------------------------------
   if (cmd === 'createtourney') {
     if (!message.member.permissions.has('Administrator')) return message.reply('❌ Only Admins can create tournaments.');
@@ -235,47 +228,15 @@ client.on('interactionCreate', async (interaction) => {
       return interaction.showModal(modal);
     }
 
-    if (interaction.isModalSubmit() && interaction.customId === 'announce_modal') {
-      const msg = interaction.fields.getTextInputValue('announce_msg');
-      const targetChannel = interaction.guild.channels.cache.get(interaction.fields.getTextInputValue('announce_channel'));
-      if (!targetChannel) return interaction.reply({ content: '❌ Invalid channel ID', ephemeral: true });
-      await targetChannel.send({ embeds: [new EmbedBuilder().setTitle('📢 ANNOUNCEMENT').setDescription(msg).setColor('Orange').setTimestamp()] });
-      return interaction.reply({ content: '✅ Announcement sent!', ephemeral: true });
-    }
-
-    // 🆔 SUBMIT ID/PASS MODAL
-    if (interaction.isModalSubmit() && interaction.customId === 'idp_submit_modal') {
-      const roomId = interaction.fields.getTextInputValue('room_id');
-      const password = interaction.fields.getTextInputValue('room_pass');
-      const targetChannel = interaction.guild.channels.cache.get(interaction.fields.getTextInputValue('channel_id'));
-
-      if (!targetChannel) return interaction.reply({ content: '❌ Invalid channel ID!', ephemeral: true });
-
-      const embed = new EmbedBuilder()
-        .setTitle('🏠 CUSTOM ROOM DETAILS')
-        .setColor('Green')
-        .addFields(
-          { name: '🆔 Room ID', value: roomId },
-          { name: '🔑 Password', value: password }
-        )
-        .setTimestamp();
-
-      await targetChannel.send({ embeds: [embed] });
-      return interaction.reply({ content: '✅ ID and Password sent to the channel!', ephemeral: true });
-    }
-
     // 🆔 OPEN ID/PASS MODAL
     if (interaction.isButton() && interaction.customId === 'open_idp') {
       if (!interaction.member.permissions.has('Administrator')) return interaction.reply({ content: '❌ No permission', ephemeral: true });
-
       const modal = new ModalBuilder().setCustomId('idp_submit_modal').setTitle('Send Room ID & Password');
-
       modal.addComponents(
         new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('room_id').setLabel('Room ID').setStyle(TextInputStyle.Short).setRequired(true)),
         new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('room_pass').setLabel('Password').setStyle(TextInputStyle.Short).setRequired(true)),
         new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('channel_id').setLabel('Target Channel ID').setStyle(TextInputStyle.Short).setRequired(true))
       );
-      
       return interaction.showModal(modal);
     }
 
@@ -297,9 +258,19 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.showModal(modal);
       }
 
-      // 🔴 CLOSE & DISTRIBUTE
+      // 🔴 CLOSE & DISTRIBUTE (WITH SECURITY FIX)
       if (interaction.customId === 'tourney_close') {
-        if (interaction.user.id !== tourney.hostId && !interaction.member.permissions.has('Administrator')) return interaction.reply({ content: '❌ Only host can close registration!', ephemeral: true });
+        
+        const isHost = interaction.user.id === tourney.hostId;
+        const isAdmin = interaction.member.permissions.has('Administrator');
+        
+        if (!isHost && !isAdmin) {
+          return interaction.reply({ 
+            content: '❌ Nice try! Only the Tournament Host or a Server Admin can close registration.', 
+            ephemeral: true 
+          });
+        }
+
         if (tourney.teams.length === 0) return interaction.reply({ content: '❌ No teams registered yet!', ephemeral: true });
 
         tourney.status = 'closed';
@@ -312,13 +283,13 @@ client.on('interactionCreate', async (interaction) => {
         const roleMapping = { A: ROLE_GROUP_A, B: ROLE_GROUP_B, C: ROLE_GROUP_C, D: ROLE_GROUP_D };
         const groupLists = { A: [], B: [], C: [], D: [] };
 
-        // Round-robin distribution (1st goes to A, 2nd to B, 3rd to C, 4th to D, 5th to A...)
+        // Round-robin distribution
         for (let i = 0; i < shuffled.length; i++) {
           const groupLetter = groupNames[i % 4]; 
           shuffled[i].group = groupLetter;
           groupLists[groupLetter].push(shuffled[i].name);
 
-          // Give the specific role to the user using your hardcoded IDs
+          // Give the specific role to the user 
           try {
             const member = await interaction.guild.members.fetch(shuffled[i].userId);
             if (member && roleMapping[groupLetter]) {
@@ -400,6 +371,36 @@ client.on('interactionCreate', async (interaction) => {
     // 🔥 MODAL SUBMIT LOGIC
     // ==========================================
     if (interaction.isModalSubmit()) {
+
+      // 📢 ANNOUNCE MODAL
+      if (interaction.customId === 'announce_modal') {
+        const msg = interaction.fields.getTextInputValue('announce_msg');
+        const targetChannel = interaction.guild.channels.cache.get(interaction.fields.getTextInputValue('announce_channel'));
+        if (!targetChannel) return interaction.reply({ content: '❌ Invalid channel ID', ephemeral: true });
+        await targetChannel.send({ embeds: [new EmbedBuilder().setTitle('📢 ANNOUNCEMENT').setDescription(msg).setColor('Orange').setTimestamp()] });
+        return interaction.reply({ content: '✅ Announcement sent!', ephemeral: true });
+      }
+
+      // 🆔 ID/PASS MODAL
+      if (interaction.customId === 'idp_submit_modal') {
+        const roomId = interaction.fields.getTextInputValue('room_id');
+        const password = interaction.fields.getTextInputValue('room_pass');
+        const targetChannel = interaction.guild.channels.cache.get(interaction.fields.getTextInputValue('channel_id'));
+  
+        if (!targetChannel) return interaction.reply({ content: '❌ Invalid channel ID!', ephemeral: true });
+  
+        const embed = new EmbedBuilder()
+          .setTitle('🏠 CUSTOM ROOM DETAILS')
+          .setColor('Green')
+          .addFields(
+            { name: '🆔 Room ID', value: roomId },
+            { name: '🔑 Password', value: password }
+          )
+          .setTimestamp();
+  
+        await targetChannel.send({ embeds: [embed] });
+        return interaction.reply({ content: '✅ ID and Password sent to the channel!', ephemeral: true });
+      }
       
       // 🏆 TOURNAMENT REGISTRATION MODAL
       if (interaction.customId.startsWith('tmodal_')) {
@@ -423,7 +424,7 @@ client.on('interactionCreate', async (interaction) => {
         const msgId = parts[2];
         const scrim = activeScrims.get(msgId);
 
-        if (!scrim && modalType !== 'announce_modal') return interaction.reply({ content: '❌ This scrim is no longer active!', ephemeral: true });
+        if (!scrim) return interaction.reply({ content: '❌ This scrim is no longer active!', ephemeral: true });
 
         if (modalType === 'team_modal') {
           const teamName = interaction.fields.getTextInputValue('team_name');
