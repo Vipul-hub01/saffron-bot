@@ -173,46 +173,70 @@ client.on('interactionCreate', async (interaction) => {
               return interaction.showModal(modal);
           }
   
-          // CLOSE TOURNAMENT
-          if (interaction.customId === 'tourney_close' && tourney) {
-              if (!isStaff) return interaction.reply({ content: '❌ Staff Only!', ephemeral: true });
-              if (tourney.teams.length === 0) return interaction.reply({ content: '❌ No teams joined.', ephemeral: true });
+          // CLOSE TOURNAMENT (OPTIMIZED)
+    if (interaction.customId === 'tourney_close' && tourney) {
+        if (!isStaff) return interaction.reply({ content: '❌ Staff Only!', ephemeral: true });
+        if (tourney.teams.length === 0) return interaction.reply({ content: '❌ No teams joined.', ephemeral: true });
 
-              await interaction.reply({ content: '⏳ Closing & Shuffling...', ephemeral: false });
-  
-              const shuffled = [...tourney.teams].sort(() => Math.random() - 0.5);
-              const groupNames = ['A', 'B', 'C', 'D'];
-              const roleMapping = { A: ROLE_GROUP_A, B: ROLE_GROUP_B, C: ROLE_GROUP_C, D: ROLE_GROUP_D };
-              const groupLists = { A: [], B: [], C: [], D: [] };
-  
-              for (let i = 0; i < shuffled.length; i++) {
-                const groupLetter = groupNames[i % 4]; 
-                shuffled[i].group = groupLetter;
-                groupLists[groupLetter].push(shuffled[i].name);
-                try {
-                  const member = await interaction.guild.members.fetch(shuffled[i].userId).catch(() => null);
-                  if (member && roleMapping[groupLetter]) await member.roles.add(roleMapping[groupLetter]);
-                } catch (err) {}
-              }
-  
-              await Tourney.create({ tourneyId: tourney.tourneyId, hostId: tourney.hostId, hostName: tourney.hostName, teams: shuffled, status: 'grouped' });
-  
-              const finalEmbed = new EmbedBuilder()
-                .setTitle(`🏆 GROUPS FOR TOURNAMENT #${tourney.tourneyId}`)
-                .setColor('Gold')
-                .addFields(
-                  { name: '📘 Group A', value: groupLists.A.join('\n') || 'None', inline: true },
-                  { name: '📕 Group B', value: groupLists.B.join('\n') || 'None', inline: true },
-                  { name: '\u200B', value: '\u200B' },
-                  { name: '📗 Group C', value: groupLists.C.join('\n') || 'None', inline: true },
-                  { name: '📒 Group D', value: groupLists.D.join('\n') || 'None', inline: true }
-                );
-  
-              await interaction.channel.send({ embeds: [finalEmbed] });
-              if (tourney.message) await tourney.message.edit({ components: [] }).catch(()=>{});
-              activeTourneys.delete(interaction.message.id);
-              return interaction.editReply({ content: '✅ Tournament Closed!' });
-          }
+        // 1. Immediate acknowledgement
+        await interaction.reply({ content: '⏳ Shuffling teams and generating groups... please wait.', ephemeral: false });
+
+        const shuffled = [...tourney.teams].sort(() => Math.random() - 0.5);
+        const groupNames = ['A', 'B', 'C', 'D'];
+        const roleMapping = { A: ROLE_GROUP_A, B: ROLE_GROUP_B, C: ROLE_GROUP_C, D: ROLE_GROUP_D };
+        const groupLists = { A: [], B: [], C: [], D: [] };
+
+        // 2. Map teams to groups
+        for (let i = 0; i < shuffled.length; i++) {
+            const groupLetter = groupNames[i % 4];
+            shuffled[i].group = groupLetter;
+            groupLists[groupLetter].push(shuffled[i].name);
+        }
+
+        // 3. Create Result Embed
+        const finalEmbed = new EmbedBuilder()
+            .setTitle(`🏆 GROUPS FOR TOURNAMENT #${tourney.tourneyId}`)
+            .setColor('Gold')
+            .addFields(
+                { name: '📘 Group A', value: groupLists.A.join('\n') || 'None', inline: true },
+                { name: '📕 Group B', value: groupLists.B.join('\n') || 'None', inline: true },
+                { name: '\u200B', value: '\u200B' },
+                { name: '📗 Group C', value: groupLists.C.join('\n') || 'None', inline: true },
+                { name: '📒 Group D', value: groupLists.D.join('\n') || 'None', inline: true }
+            )
+            .setTimestamp();
+
+        // 4. Send the groups to the channel immediately
+        await interaction.channel.send({ embeds: [finalEmbed] });
+
+        // 5. Update the original panel to remove buttons
+        if (tourney.message) await tourney.message.edit({ components: [] }).catch(() => {});
+
+        // 6. Finalize the interaction so the "loading" stops
+        await interaction.editReply({ content: `✅ Tournament #${tourney.tourneyId} Closed Successfully!` });
+
+        // 7. BACKGROUND ROLE ASSIGNMENT (This happens after the message is sent)
+        for (const team of shuffled) {
+            const groupRole = roleMapping[team.group];
+            if (groupRole) {
+                const member = await interaction.guild.members.fetch(team.userId).catch(() => null);
+                if (member) {
+                    await member.roles.add(groupRole).catch(err => console.log(`Could not add role to ${team.name}: ${err.message}`));
+                }
+            }
+        }
+
+        // 8. Save to DB and cleanup
+        await Tourney.create({ 
+            tourneyId: tourney.tourneyId, 
+            hostId: tourney.hostId, 
+            hostName: tourney.hostName, 
+            teams: shuffled, 
+            status: 'grouped' 
+        });
+        activeTourneys.delete(interaction.message.id);
+        return;
+    }
 
           // (Join Scrim Logic)
           if (interaction.customId === 'join' && scrim) {
