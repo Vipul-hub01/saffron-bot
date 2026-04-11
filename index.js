@@ -47,11 +47,13 @@ async function connectDB() {
   } catch (err) { console.error('⚠️ DB Error:', err.message); }
 }
 
-// ⚙️ IDS (UPDATE THESE!)
+// ==========================================
+// ⚙️ SETTINGS & IDS (CRITICAL: UPDATE THESE)
+// ==========================================
 const SCRIM_ROLE_ID = "1488611595318988850";
-const LOG_CHANNEL_ID = "1489298280960622805";
 const HOST_ROLE_ID = "1488613066470981673";
-const REG_LOG_CHANNEL_ID = "YOUR_SEPARATE_REG_LOG_CHANNEL_ID"; // 🔥 NEW: Channel for player lists
+const LOG_CHANNEL_ID = "1489298280960622805";
+const REG_LOG_CHANNEL_ID = "1489298280960622805"; // Put your Player Registration Log ID here
 
 const ROLE_GROUP_A = "1492126223298596864";
 const ROLE_GROUP_B = "1492126277199728741";
@@ -62,7 +64,25 @@ const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBit
 const activeScrims = new Map(); 
 const activeTourneys = new Map();
 
-client.once('ready', () => { connectDB(); console.log(`✅ Saffron Bot is Online!`); });
+client.once('ready', () => { connectDB(); console.log(`✅ Saffron Bot is ONLINE!`); });
+
+// 📝 HELPER FUNCTIONS
+async function sendLog(guild, title, description, color = 'Grey') {
+    try {
+      const logChannel = await guild.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
+      if (!logChannel) return;
+      const logEmbed = new EmbedBuilder().setTitle(`LOG: ${title}`).setDescription(description).setColor(color).setTimestamp();
+      await logChannel.send({ embeds: [logEmbed] });
+    } catch (err) {}
+}
+
+function updateScrimEmbed(scrim) {
+    const embed = new EmbedBuilder().setTitle(`🔥 SCRIM MATCH #${scrim.matchId}`).setColor('#e67e22').addFields(
+        { name: '🎮 Slots', value: `\`${scrim.teams.length} / 25\`` },
+        { name: '📋 Teams', value: scrim.teams.map((t, i) => `${i + 1}. ${t.name}`).join('\n') || 'No teams' }
+    );
+    scrim.message.edit({ embeds: [embed] }).catch(() => {});
+}
 
 // ==========================================
 // 🎮 MESSAGE COMMANDS
@@ -80,7 +100,7 @@ client.on('messageCreate', async (message) => {
     tourneyCounter++;
     const tid = tourneyCounter;
     const nt = { tourneyId: tid, hostId: message.author.id, teams: [], maxTeams: 100, message: null };
-    const embed = new EmbedBuilder().setTitle(`🏆 TOURNAMENT REGISTRATION #${tid}`).setDescription('Click Register to join. Leaders must tag all players.').addFields({ name: '📊 Slots', value: `\`0 / 100\`` }).setColor('#7d5ba6');
+    const embed = new EmbedBuilder().setTitle(`🏆 TOURNAMENT REGISTRATION #${tid}`).setDescription('Click Register to join. Leaders must tag players!').addFields({ name: '📊 Slots', value: `\`0 / 100\`` }).setColor('#7d5ba6');
     const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('t_join').setLabel('Register Team').setStyle(ButtonStyle.Success),
         new ButtonBuilder().setCustomId('t_leave').setLabel('Leave').setStyle(ButtonStyle.Secondary),
@@ -117,53 +137,50 @@ client.on('interactionCreate', async (interaction) => {
       const scrim = activeScrims.get(interaction.message?.id);
 
       if (interaction.isButton()) {
-          if (interaction.customId === 't_join' && tourney) {
-              if (tourney.teams.some(t => t.userId === interaction.user.id)) return interaction.reply({ content: '❌ Already in!', ephemeral: true });
-              const m = new ModalBuilder().setCustomId(`tmod_j_${interaction.message.id}`).setTitle('Team Registration');
-              m.addComponents(
-                  new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('tn').setLabel('Team Name').setStyle(TextInputStyle.Short).setRequired(true)),
-                  new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('tp').setLabel('Teammates (Tag them)').setStyle(TextInputStyle.Paragraph).setPlaceholder('@player1 @player2 @player3').setRequired(true))
-              );
-              return interaction.showModal(m);
-          }
-          // (Other buttons t_leave, t_close, scrim buttons remain identical to previous version)
-      }
-
-      if (interaction.isModalSubmit()) {
-          // 🔥 UPDATED TOURNAMENT REGISTRATION LOGIC
-          if (interaction.customId.startsWith('tmod_j_')) {
-              const tourneyMsgId = interaction.customId.split('_')[2];
-              const tData = activeTourneys.get(tourneyMsgId);
-              if (!tData) return interaction.reply({ content: '❌ Tournament session expired.', ephemeral: true });
-
-              const teamName = interaction.fields.getTextInputValue('tn');
-              const teammates = interaction.fields.getTextInputValue('tp');
-
-              tData.teams.push({ name: teamName, userId: interaction.user.id });
-
-              // 1. Update the Main Tournament Panel
-              await tData.message.edit({ embeds: [EmbedBuilder.from(tData.message.embeds[0]).setFields({ name: '📊 Slots', value: `\`${tData.teams.length} / 100\`` })] });
-
-              // 2. Post to the SEPARATE REGISTRATION LOG CHANNEL
-              const regLogChannel = await interaction.guild.channels.fetch(REG_LOG_CHANNEL_ID).catch(() => null);
-              if (regLogChannel) {
-                  const regEmbed = new EmbedBuilder()
-                      .setTitle(`📝 NEW REGISTRATION: TOURNAMENT #${tData.tourneyId}`)
-                      .setColor('Purple')
-                      .addFields(
-                          { name: '🚩 Team Name', value: teamName, inline: true },
-                          { name: '👑 Leader', value: `<@${interaction.user.id}>`, inline: true },
-                          { name: '👥 Players', value: teammates }
-                      )
-                      .setTimestamp();
-                  await regLogChannel.send({ embeds: [regEmbed] });
+          // --- SCRIM BUTTONS ---
+          if (scrim) {
+              if (interaction.customId === 's_join') {
+                  if (scrim.teams.some(t => t.userId === interaction.user.id)) return interaction.reply({ content: '❌ Already in!', ephemeral: true });
+                  const m = new ModalBuilder().setCustomId(`smod_j_${interaction.message.id}`).setTitle('Scrim Join');
+                  m.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('n').setLabel('Team Name').setStyle(TextInputStyle.Short).setRequired(true)));
+                  return interaction.showModal(m);
               }
-
-              return interaction.reply({ content: `✅ Registered **${teamName}** successfully!`, ephemeral: true });
+              if (interaction.customId === 's_leave') {
+                  scrim.teams = scrim.teams.filter(t => t.userId !== interaction.user.id);
+                  updateScrimEmbed(scrim);
+                  return interaction.reply({ content: '✅ Left scrim.', ephemeral: true });
+              }
+              if (interaction.customId === 's_lock' && isStaff) {
+                const m = new ModalBuilder().setCustomId(`smod_l_${interaction.message.id}`).setTitle('ID/Pass');
+                m.addComponents(
+                    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('id').setLabel('Room ID').setStyle(TextInputStyle.Short).setRequired(true)),
+                    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('pw').setLabel('Password').setStyle(TextInputStyle.Short).setRequired(true)),
+                    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('ch').setLabel('Channel ID').setStyle(TextInputStyle.Short).setRequired(true))
+                );
+                return interaction.showModal(m);
+              }
+              if (interaction.customId === 's_end' && isStaff) {
+                  await Match.create({ matchId: scrim.matchId, host: scrim.hostName, teams: scrim.teams });
+                  activeScrims.delete(interaction.message.id);
+                  return interaction.message.delete().catch(()=>{});
+              }
           }
-          // (Other modal submissions s_join, idp remain the same)
-      }
-    } catch (e) { console.error(e); }
-});
 
-// (Add the updateScrimEmbed function and client.login from previous version)
+          // --- TOURNEY BUTTONS ---
+          if (tourney) {
+              if (interaction.customId === 't_join') {
+                  if (tourney.teams.some(t => t.userId === interaction.user.id)) return interaction.reply({ content: '❌ Already in!', ephemeral: true });
+                  const m = new ModalBuilder().setCustomId(`tmod_j_${interaction.message.id}`).setTitle('Tournament Registration');
+                  m.addComponents(
+                      new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('tn').setLabel('Team Name').setStyle(TextInputStyle.Short).setRequired(true)),
+                      new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('tp').setLabel('Players (Tag Teammates)').setStyle(TextInputStyle.Paragraph).setRequired(true))
+                  );
+                  return interaction.showModal(m);
+              }
+              if (interaction.customId === 't_leave') {
+                  tourney.teams = tourney.teams.filter(t => t.userId !== interaction.user.id);
+                  await tourney.message.edit({ embeds: [EmbedBuilder.from(tourney.message.embeds[0]).setFields({ name: '📊 Slots', value: `\`${tourney.teams.length} / 100\`` })] });
+                  return interaction.reply({ content: '✅ Left tournament.', ephemeral: true });
+              }
+              if (interaction.customId === 't_close' && isStaff) {
+                  await interaction.reply({ content: '⏳ Grouping teams...' });
