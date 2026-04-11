@@ -81,6 +81,17 @@ client.once('ready', () => {
     console.log(`✅ ${client.user.tag} is now LIVE!`); 
 });
 
+// ==========================================
+// 🔌 CONNECTION DIAGNOSTICS
+// ==========================================
+client.on('error', (err) => {
+    console.error('❌ DISCORD CLIENT ERROR:', err);
+});
+
+client.on('warn', (info) => {
+    console.warn('⚠️ DISCORD CLIENT WARNING:', info);
+});
+
 // 📝 HELPERS
 function updateScrimEmbed(scrim) {
     const embed = new EmbedBuilder().setTitle(`🔥 SCRIM MATCH #${scrim.matchId}`).setColor('#e67e22').addFields(
@@ -277,4 +288,25 @@ client.on('interactionCreate', async (interaction) => {
     } catch (e) { console.error('⚠️ Interaction Error:', e); }
 });
 
-client.login(process.env.DISCORD_TOKEN);
+// ==========================================
+// 🚀 LOGIN WITH DIAGNOSTICS
+// ==========================================
+const LOGIN_TIMEOUT_MS = 30_000;
+
+const loginTimeout = setTimeout(() => {
+    console.error(`❌ LOGIN TIMEOUT: client.login() did not resolve within ${LOGIN_TIMEOUT_MS / 1000}s. Check DISCORD_TOKEN and network connectivity.`);
+    process.exit(1);
+}, LOGIN_TIMEOUT_MS);
+
+(async () => {
+    try {
+        console.log('⏳ Logging in to Discord...');
+        await client.login(process.env.DISCORD_TOKEN);
+        clearTimeout(loginTimeout);
+        console.log('✅ client.login() resolved successfully.');
+    } catch (err) {
+        clearTimeout(loginTimeout);
+        console.error('❌ DISCORD LOGIN FAILED:', err);
+        process.exit(1);
+    }
+})();
