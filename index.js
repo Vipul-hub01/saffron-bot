@@ -230,11 +230,37 @@ client.on('interactionCreate', async (interaction) => {
                   return interaction.reply({ content: 'Record results for:', components: [new ActionRowBuilder().addComponents(menu)], ephemeral: true });
               }
               if (interaction.customId === 's_end') {
-                  await interaction.reply({ content: '⏳ Archiving...', ephemeral: true });
-                  await Match.create({ matchId: scrim.matchId, host: interaction.user.tag, teams: scrim.teams, results: scrim.results });
-                  sendLog(interaction.guild, 'Scrim Saved', `Match #${scrim.matchId} finalized.`, 'Grey');
+                  if (!isStaff) return interaction.reply({ content: '❌ Staff Only', ephemeral: true });
+                  
+                  await interaction.reply({ content: '⏳ Ending scrim, removing roles, and archiving data...', ephemeral: true });
+
+                  // 🔥 NEW: Role Removal Loop
+                  // We loop through every team registered in the scrim
+                  for (const team of scrim.teams) {
+                      try {
+                          const member = await interaction.guild.members.fetch(team.userId).catch(() => null);
+                          if (member) {
+                              // Remove the Scrim Role from the player
+                              await member.roles.remove(SCRIM_ROLE_ID).catch(err => console.log(`Could not remove role from ${team.name}: ${err.message}`));
+                          }
+                      } catch (err) {
+                          console.error(`Failed to fetch member ${team.userId}`);
+                      }
+                  }
+
+                  // Save to Database
+                  await Match.create({ 
+                      matchId: scrim.matchId, 
+                      host: interaction.user.tag, 
+                      teams: scrim.teams, 
+                      results: scrim.results 
+                  });
+
+                  sendLog(interaction.guild, 'Scrim Ended', `Scrim Match #${scrim.matchId} finalized. Roles removed for ${scrim.teams.length} teams.`, 'Grey');
+                  
+                  // Cleanup the active session
                   activeScrims.delete(interaction.message.id);
-                  return interaction.message.delete().catch(()=>{});
+                  return interaction.message.delete().catch(() => {});
               }
           }
 
